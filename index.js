@@ -75,4 +75,7 @@ app.get("/token", async (req, res) => {
 // Health check
 app.get("/", (req, res) => res.json({ status: "Chai Proxy running!" }));
 
-app.listen(3001, () => console.log("Chai Proxy running on http://localhost:3001"));
+if (require.main === module) {
+  app.listen(3001, () => console.log("Chai Proxy running on http://localhost:3001"));
+}
+module.exports = app;
