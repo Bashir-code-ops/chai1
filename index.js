@@ -38,8 +38,7 @@ app.post("/chat/:conversationId", async (req, res) => {
     const { conversationId } = req.params;
     const token = await getFreshToken();
     const timestamp = Date.now();
-    const fullConversationId = `${conversationId}_${CHAI_UID}_${timestamp}`;
-    const chaiUrl = `https://web.chai-research.com/chat/${fullConversationId}`;
+    const chaiUrl = `https://web.chai-research.com/chat/${conversationId}`;
 
     const response = await fetch(chaiUrl, {
       method: "POST",
@@ -52,7 +51,7 @@ app.post("/chat/:conversationId", async (req, res) => {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Cookie": `firebaseToken=${token}`,
       },
-      body: JSON.stringify([CHAI_UID]),
+      body: typeof req.body === 'string' ? req.body : JSON.stringify(req.body),
     });
 
     const text = await response.text();
