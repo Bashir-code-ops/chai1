@@ -47,7 +47,7 @@ app.post("/chat/:conversationId", async (req, res) => {
         "Content-Type": "text/plain;charset=UTF-8",
         "next-action": NEXT_ACTION,
         "Origin": "https://web.chai-research.com",
-        "Referer": `https://web.chai-research.com/chat/${fullConversationId}`,
+        "Referer": `https://web.chai-research.com/chat/${conversationId}`,
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Cookie": `firebaseToken=${token}`,
       },
@@ -56,9 +56,10 @@ app.post("/chat/:conversationId", async (req, res) => {
 
     const text = await response.text();
     res.status(response.status).send(text);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
+ } catch (error) {
+  console.error('Proxy error:', error.stack || error.message);
+  res.status(500).json({ error: error.message });
+}
 });
 
 // Get fresh token
