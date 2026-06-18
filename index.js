@@ -1,16 +1,19 @@
 const express = require("express");
 const cors = require("cors");
-const https = require("https");
 const app = express();
 app.use(cors());
 app.use(express.json());
-app.use(express.text({ type: "text/plain" }));
 
-const FIREBASE_API_KEY = "AIzaSyD9Yd1ur8O76K_3ldWdcQEATJB_W-6wods";
-const CHAI_UID = "5UjcH6R0zWYwzLciAX7lz9F3Sz02";
-const REFRESH_TOKEN = "AMf-vBxABjgCQ0SoRCymcdUbckokYPr9aPJ7-zsy6cFeXMioykMeSSGJiF4Vpi1tqic6HqzfaTmNWDPAo1Z-WBAEFGAuY_tGRt_fyujgs4zhwj7FnvFIp-ZKWM4RsX8sO5qwVZ6gRVFn5eo8kehreZbOCblhhqMMqgaR-EgI_whH4uVWONzzR_QqZnOfWA_yRrEuxAQy4YwoA6znvXbLNz-v21MJbhrzLQiZ6Vc--XuUWqD9Z09f5W2KLfU-8Zq96LPygwE2LS-BLQCqrLCxFzQEVOLRH_422e68fhEbmwv3cvJitPo3LoPas1VO4XCAvULjjT0HC6SjbG6ko03H1VW-NOCCbOTpmlXfrvIUVO-g0bcCsCYLZIL0WMgz5V9PvJ1LYPz4QKBv";
-const NEXT_ACTION = "40c310248f7ddff7be9b149fd121cc0806f8ba6f75";
+// ── Credentials ──────────────────────────────────────────────────────────────
+const FIREBASE_API_KEY = "AIzaSyDlCazdn_bziqDVwQkDroR8eK4GVaEHawU"; // from APK
+const CHAI_UID        = "5UjcH6R0zWYwzLciAX7lz9F3Sz02";
+const REFRESH_TOKEN   = "AMf-vBxABjgCQ0SoRCymcdUbckokYPr9aPJ7-zsy6cFeXMioykMeSSGJiF4Vpi1tqic6HqzfaTmNWDPAo1Z-WBAEFGAuY_tGRt_fyujgs4zhwj7FnvFIp-ZKWM4RsX8sO5qwVZ6gRVFn5eo8kehreZbOCblhhqMMqgaR-EgI_whH4uVWONzzR_QqZnOfWA_yRrEuxAQy4YwoA6znvXbLNz-v21MJbhrzLQiZ6Vc--XuUWqD9Z09f5W2KLfU-8Zq96LPygwE2LS-BLQCqrLCxFzQEVOLRH_422e68fhEbmwv3cvJitPo3LoPas1VO4XCAvULjjT0HC6SjbG6ko03H1VW-NOCCbOTpmlXfrvIUVO-g0bcCsCYLZIL0WMgz5V9PvJ1LYPz4QKBv";
 
+// ── Mobile API endpoints (from APK reverse engineering) ───────────────────────
+const BOT_RESPONDER   = "https://bot-responder-eu-shdxwd54ta-nw.a.run.app";
+const BOT_SERVICE     = "https://bot-service-us1-shdxwd54ta-uc.a.run.app";
+
+// ── Token cache ───────────────────────────────────────────────────────────────
 let cachedToken = null;
 let tokenExpiry = 0;
 
@@ -25,52 +28,88 @@ async function getFreshToken() {
     }
   );
   const data = await res.json();
+  if (!data.id_token) throw new Error("Token refresh failed: " + JSON.stringify(data));
   cachedToken = data.id_token;
-  tokenExpiry = Date.now() + (3500 * 1000);
+  tokenExpiry = Date.now() + 3500 * 1000;
+  console.log("✅ Token refreshed");
   return cachedToken;
 }
 
-app.post("/chat/:conversationId", async (req, res) => {
+// ── GET /botinfo/:botId — fetch bot metadata ──────────────────────────────────
+app.get("/botinfo/:botId", async (req, res) => {
   try {
-    const { conversationId } = req.params;
-    console.log('Content-Type:', req.headers['content-type']);
-    console.log('Body type:', typeof req.body);
-    console.log('Body:', JSON.stringify(req.body)?.substring(0, 300));
     const token = await getFreshToken();
-    const chaiUrl = `https://web.chai-research.com/chat/${conversationId}`;
-    const response = await fetch(chaiUrl, {
-      method: "POST",
-      headers: {
-        "Accept": "text/x-component",
-        "Content-Type": "text/plain;charset=UTF-8",
-        "next-action": NEXT_ACTION,
-        "Origin": "https://web.chai-research.com",
-        "Referer": `https://web.chai-research.com/chat/${conversationId}`,
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Cookie": `firebaseToken=${token}`,
-      },
-      body: typeof req.body === 'string' ? req.body : JSON.stringify(req.body),
+    const url = `${BOT_SERVICE}/chatbots/v2?bot_uid=${req.params.botId}`;
+    const response = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}` },
     });
-   const text = await response.text();
-   console.log('Chai status:', response.status);
-   console.log('Chai response:', text.substring(0, 2000));
-   res.status(response.status).send(text);
-  } catch (error) {
-    console.error('Proxy error:', error.stack || error.message);
-    res.status(500).json({ error: error.message });
+    const data = await response.json();
+    console.log("Bot info:", JSON.stringify(data).substring(0, 300));
+    res.status(response.status).json(data);
+  } catch (err) {
+    console.error("Bot info error:", err.message);
+    res.status(500).json({ error: err.message });
   }
 });
 
+// ── POST /chat — send a message to a bot ─────────────────────────────────────
+// Body: { botId, message, conversationId? }
+app.post("/chat", async (req, res) => {
+  try {
+    const { botId, message, conversationId } = req.body;
+    if (!botId || !message) {
+      return res.status(400).json({ error: "botId and message are required" });
+    }
+
+    const token = await getFreshToken();
+    const now = Date.now();
+
+    const payload = {
+      sender_uid:              CHAI_UID,
+      bot_uid:                 botId,
+      conversation_id:         conversationId || `${CHAI_UID}_${botId}`,
+      raw_message:             message,
+      user_message_timestamp_ms: now,
+    };
+
+    console.log("→ Sending to bot-responder:", JSON.stringify(payload));
+
+    const response = await fetch(`${BOT_RESPONDER}/send_message`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${token}`,
+        "Content-Type":  "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const text = await response.text();
+    console.log("← Bot-responder status:", response.status);
+    console.log("← Bot-responder body:", text.substring(0, 500));
+
+    // Try to parse as JSON, fall back to raw text
+    try {
+      res.status(response.status).json(JSON.parse(text));
+    } catch {
+      res.status(response.status).send(text);
+    }
+  } catch (err) {
+    console.error("Chat error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /token — expose current token + uid (for frontend) ───────────────────
 app.get("/token", async (req, res) => {
   try {
     const token = await getFreshToken();
     res.json({ token, uid: CHAI_UID });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 
-app.get("/", (req, res) => res.json({ status: "Chai Proxy running!" }));
+app.get("/", (req, res) => res.json({ status: "Chai Proxy running (mobile API)" }));
 
 if (require.main === module) {
   app.listen(3001, () => console.log("Chai Proxy running on http://localhost:3001"));
