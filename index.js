@@ -137,6 +137,19 @@ app.get("/search", async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+// ── GET /image?url=... — proxy bot images to avoid mixed content ──────────────
+app.get("/image", async (req, res) => {
+  try {
+    const imageUrl = decodeURIComponent(req.query.url);
+    const response = await fetch(imageUrl);
+    const buffer = await response.arrayBuffer();
+    const contentType = response.headers.get("content-type") || "image/jpeg";
+    res.setHeader("Content-Type", contentType);
+    res.setHeader("Cache-Control", "public, max-age=86400");
+    res.send(Buffer.from(buffer));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 app.get("/", (req, res) => res.json({ status: "Chai Proxy running (mobile API)" }));
 
