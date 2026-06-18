@@ -51,8 +51,10 @@ app.post("/chat/:conversationId", async (req, res) => {
       },
       body: typeof req.body === 'string' ? req.body : JSON.stringify(req.body),
     });
-    const text = await response.text();
-    res.status(response.status).send(text);
+   const text = await response.text();
+   console.log('Chai status:', response.status);
+   console.log('Chai response:', text.substring(0, 500));
+   res.status(response.status).send(text);
   } catch (error) {
     console.error('Proxy error:', error.stack || error.message);
     res.status(500).json({ error: error.message });
