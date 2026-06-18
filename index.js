@@ -108,7 +108,36 @@ app.get("/token", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+// ── GET /feed — get the bot discovery feed ────────────────────────────────────
+app.get("/feed", async (req, res) => {
+  try {
+    const token = await getFreshToken();
+    const response = await fetch(
+      "https://chai-feed-service-65663778556.us-central1.run.app/feeds/strict-or-lax-acquisition-resolved-feed",
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    const data = await response.json();
+    res.status(response.status).json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
+// ── GET /search?q=xxx — search bots ──────────────────────────────────────────
+app.get("/search", async (req, res) => {
+  try {
+    const token = await getFreshToken();
+    const query = req.query.q || "";
+    const response = await fetch(
+      `https://bot-service-us1-65663778556.us-central1.run.app/v2/search?search_query=${encodeURIComponent(query)}&from_index=0&num_results=20`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    const data = await response.json();
+    res.status(response.status).json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 app.get("/", (req, res) => res.json({ status: "Chai Proxy running (mobile API)" }));
 
 if (require.main === module) {
