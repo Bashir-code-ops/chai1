@@ -65,12 +65,12 @@ app.post("/chat", async (req, res) => {
     const now = Date.now();
 
     const payload = {
-      sender_uid:              CHAI_UID,
-      bot_uid:                 botId,
-      conversation_id:         conversationId || `${CHAI_UID}_${botId}`,
-      raw_message:             message,
-      user_message_timestamp_ms: now,
-    };
+  user_uid:        CHAI_UID,
+  bot_uid:         botId,
+  conversation_id: conversationId || `${CHAI_UID}_${botId}`,
+  text:            message,
+  model:           "chai_v2",
+};
 
     console.log("→ Sending to bot-responder:", JSON.stringify(payload));
 
