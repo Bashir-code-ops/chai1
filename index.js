@@ -134,10 +134,12 @@ app.get("/search", async (req, res) => {
     );
     const data = await response.json();
     res.status(response.status).json(data);
-  } catch (err) {
+    } catch (err) {
     res.status(500).json({ error: err.message });
   }
-// ── GET /image?url=... — proxy bot images to avoid mixed content ──────────────
+});  
+
+// ── GET /image?url=... ──
 app.get("/image", async (req, res) => {
   try {
     const imageUrl = decodeURIComponent(req.query.url);
