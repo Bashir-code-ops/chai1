@@ -1,7 +1,6 @@
 const express = require("express");
 const cors = require("cors");
 const https = require("https");
-
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -17,7 +16,6 @@ let tokenExpiry = 0;
 
 async function getFreshToken() {
   if (cachedToken && Date.now() < tokenExpiry) return cachedToken;
-  
   const res = await fetch(
     `https://securetoken.googleapis.com/v1/token?key=${FIREBASE_API_KEY}`,
     {
@@ -28,18 +26,18 @@ async function getFreshToken() {
   );
   const data = await res.json();
   cachedToken = data.id_token;
-  tokenExpiry = Date.now() + (3500 * 1000); // refresh before expiry
+  tokenExpiry = Date.now() + (3500 * 1000);
   return cachedToken;
 }
 
-// Send message to Chai bot
 app.post("/chat/:conversationId", async (req, res) => {
   try {
     const { conversationId } = req.params;
+    console.log('Content-Type:', req.headers['content-type']);
+    console.log('Body type:', typeof req.body);
+    console.log('Body:', JSON.stringify(req.body)?.substring(0, 300));
     const token = await getFreshToken();
-    const timestamp = Date.now();
     const chaiUrl = `https://web.chai-research.com/chat/${conversationId}`;
-
     const response = await fetch(chaiUrl, {
       method: "POST",
       headers: {
@@ -53,16 +51,14 @@ app.post("/chat/:conversationId", async (req, res) => {
       },
       body: typeof req.body === 'string' ? req.body : JSON.stringify(req.body),
     });
-
     const text = await response.text();
     res.status(response.status).send(text);
- } catch (error) {
-  console.error('Proxy error:', error.stack || error.message);
-  res.status(500).json({ error: error.message });
-}
+  } catch (error) {
+    console.error('Proxy error:', error.stack || error.message);
+    res.status(500).json({ error: error.message });
+  }
 });
 
-// Get fresh token
 app.get("/token", async (req, res) => {
   try {
     const token = await getFreshToken();
@@ -72,7 +68,6 @@ app.get("/token", async (req, res) => {
   }
 });
 
-// Health check
 app.get("/", (req, res) => res.json({ status: "Chai Proxy running!" }));
 
 if (require.main === module) {
