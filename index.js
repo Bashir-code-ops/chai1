@@ -53,7 +53,7 @@ app.post("/chat/:conversationId", async (req, res) => {
     });
    const text = await response.text();
    console.log('Chai status:', response.status);
-   console.log('Chai response:', text.substring(0, 500));
+   console.log('Chai response:', text.substring(0, 2000));
    res.status(response.status).send(text);
   } catch (error) {
     console.error('Proxy error:', error.stack || error.message);
