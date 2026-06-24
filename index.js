@@ -10,15 +10,9 @@ const CHAI_UID         = "5UjcH6R0zWYwzLciAX7lz9F3Sz02";
 const REFRESH_TOKEN    = "AMf-vBxABjgCQ0SoRCymcdUbckokYPr9aPJ7-zsy6cFeXMioykMeSSGJiF4Vpi1tqic6HqzfaTmNWDPAo1Z-WBAEFGAuY_tGRt_fyujgs4zhwj7FnvFIp-ZKWM4RsX8sO5qwVZ6gRVFn5eo8kehreZbOCblhhqMMqgaR-EgI_whH4uVWONzzR_QqZnOfWA_yRrEuxAQy4YwoA6znvXbLNz-v21MJbhrzLQiZ6Vc--XuUWqD9Z09f5W2KLfU-8Zq96LPygwE2LS-BLQCqrLCxFzQEVOLRH_422e68fhEbmwv3cvJitPo3LoPas1VO4XCAvULjjT0HC6SjbG6ko03H1VW-NOCCbOTpmlXfrvIUVO-g0bcCsCYLZIL0WMgz5V9PvJ1LYPz4QKBv";
 const BOT_RESPONDER    = "https://bot-responder-eu-shdxwd54ta-nw.a.run.app";
 const BOT_SERVICE      = "https://bot-service-us1-shdxwd54ta-uc.a.run.app";
-const API_SECRET       = "xK9#mP2$vL7qR4nJ";
 
 // ── API key protection ────────────────────────────────────────────────────────
-app.use((req, res, next) => {
-  if (req.path === "/") return next();
-  const key = req.headers["x-api-key"];
-  if (key !== API_SECRET) return res.status(401).json({ error: "Unauthorized" });
-  next();
-});
+
 
 // ── Token cache ───────────────────────────────────────────────────────────────
 let cachedToken = null;
