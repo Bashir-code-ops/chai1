@@ -149,13 +149,15 @@ app.get("/image", async (req, res) => {
 app.get("/developer/:developerId", async (req, res) => {
   try {
     const token = await getFreshToken();
+    const devName = req.query.name || "";
     const devId = req.params.developerId;
     const response = await fetch(
-      `https://bot-service-us1-65663778556.us-central1.run.app/v2/search?text=&developer_uid=${devId}&from_index=0&num_results=20`,
+      `https://bot-service-us1-65663778556.us-central1.run.app/v2/search?text=${encodeURIComponent(devName)}&from_index=0&num_results=50`,
       { headers: { Authorization: `Bearer ${token}` } }
     );
     const data = await response.json();
-    res.status(response.status).json(data);
+    const filtered = (data.data || []).filter(bot => bot.developer_uid === devId);
+    res.json({ data: filtered });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
