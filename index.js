@@ -71,7 +71,8 @@ app.get("/search", async (req, res) => {
 app.get("/botinfo/:botId", async (req, res) => {
   try {
     const token = await getFreshToken();
-    const url = `${BOT_SERVICE}/chatbots/v2?bot_uid=${req.params.botId}`;
+    const botId = req.params.botId.startsWith('_bot_') ? req.params.botId : `_bot_${req.params.botId}`;
+    const url = `${BOT_SERVICE}/chatbots/v2?bot_uid=${botId}`;
     const response = await fetch(url, {
       headers: { Authorization: `Bearer ${token}` },
     });
