@@ -145,6 +145,21 @@ app.get("/image", async (req, res) => {
   }
 });
 
+// ── GET /developer/:developerId — get bots by developer ──────────────────────
+app.get("/developer/:developerId", async (req, res) => {
+  try {
+    const token = await getFreshToken();
+    const response = await fetch(
+      `https://bot-service-us1-shdxwd54ta-uc.a.run.app/chatbots/v2?developer_uid=${req.params.developerId}`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    const data = await response.json();
+    res.status(response.status).json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Health check ──────────────────────────────────────────────────────────────
 app.get("/", (req, res) => res.json({ status: "Chai Proxy running (mobile API)" }));
 
