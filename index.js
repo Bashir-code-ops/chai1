@@ -72,7 +72,7 @@ app.get("/botinfo/:botId", async (req, res) => {
   try {
     const token = await getFreshToken();
     const botId = req.params.botId.startsWith('_bot_') ? req.params.botId : `_bot_${req.params.botId}`;
-    const url = `${BOT_SERVICE}/chatbots/v2?bot_uid=${botId}`;
+    const url = `https://bot-service-us1-65663778556.us-central1.run.app/chatbots/v2?bot_uid=${botId}`;
     const response = await fetch(url, {
       headers: { Authorization: `Bearer ${token}` },
     });
