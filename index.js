@@ -67,22 +67,6 @@ app.get("/search", async (req, res) => {
   }
 });
 
-// ── GET /botinfo/:botId ───────────────────────────────────────────────────────
-app.get("/botinfo/:botId", async (req, res) => {
-  try {
-    const token = await getFreshToken();
-    const botId = req.params.botId.startsWith('_bot_') ? req.params.botId : `_bot_${req.params.botId}`;
-    const url = `https://bot-service-us1-65663778556.us-central1.run.app/chatbots/v2?bot_uid=${botId}`;
-    const response = await fetch(url, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    const data = await response.json();
-    res.status(response.status).json(data);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
 // ── POST /chat ────────────────────────────────────────────────────────────────
 app.post("/chat", async (req, res) => {
   try {
@@ -146,23 +130,6 @@ app.get("/image", async (req, res) => {
   }
 });
 
-// ── GET /developer/:developerId — get bots by developer ──────────────────────
-app.get("/developer/:developerId", async (req, res) => {
-  try {
-    const token = await getFreshToken();
-    const devName = req.query.name || "";
-    const devId = req.params.developerId;
-    const response = await fetch(
-      `https://bot-service-us1-65663778556.us-central1.run.app/v2/search?text=${encodeURIComponent(devName)}&from_index=0&num_results=50`,
-      { headers: { Authorization: `Bearer ${token}` } }
-    );
-    const data = await response.json();
-    const filtered = (data.data || []).filter(bot => bot.developer_uid === devId);
-    res.json({ data: filtered });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
 
 // ── Health check ──────────────────────────────────────────────────────────────
 app.get("/", (req, res) => res.json({ status: "Chai Proxy running (mobile API)" }));
