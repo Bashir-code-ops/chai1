@@ -149,8 +149,9 @@ app.get("/image", async (req, res) => {
 app.get("/developer/:developerId", async (req, res) => {
   try {
     const token = await getFreshToken();
+    const devId = req.params.developerId;
     const response = await fetch(
-      `https://bot-service-us1-shdxwd54ta-uc.a.run.app/chatbots/v2?developer_uid=${req.params.developerId}`,
+      `https://bot-service-us1-65663778556.us-central1.run.app/v2/search?developer_uid=${devId}&from_index=0&num_results=20`,
       { headers: { Authorization: `Bearer ${token}` } }
     );
     const data = await response.json();
