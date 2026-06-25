@@ -151,7 +151,7 @@ app.get("/developer/:developerId", async (req, res) => {
     const token = await getFreshToken();
     const devId = req.params.developerId;
     const response = await fetch(
-      `https://bot-service-us1-65663778556.us-central1.run.app/v2/search?developer_uid=${devId}&from_index=0&num_results=20`,
+      `https://bot-service-us1-65663778556.us-central1.run.app/v2/search?text=&developer_uid=${devId}&from_index=0&num_results=20`,
       { headers: { Authorization: `Bearer ${token}` } }
     );
     const data = await response.json();
