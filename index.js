@@ -57,7 +57,7 @@ app.get("/search", async (req, res) => {
     const token = await getFreshToken();
     const query = req.query.q || "";
     const response = await fetch(
-      `https://bot-service-us1-65663778556.us-central1.run.app/v2/search?text=${encodeURIComponent(query)}&from=${req.query.from || 0}&num_results=20`,
+      `https://bot-service-us1-65663778556.us-central1.run.app/v2/search?text=${encodeURIComponent(query)}&limit=20&offset=${req.query.offset || 0}`,
       { headers: { Authorization: `Bearer ${token}` } }
     );
     const data = await response.json();
