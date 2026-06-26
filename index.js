@@ -130,6 +130,20 @@ app.get("/image", async (req, res) => {
   }
 });
 
+// ── GET /user/:userId — get creator profile ───────────────────────────────────
+app.get("/user/:userId", async (req, res) => {
+  try {
+    const token = await getFreshToken();
+    const response = await fetch(
+      `https://chai-user-service-65663778556.us-central1.run.app/users/${req.params.userId}`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    const data = await response.json();
+    res.status(response.status).json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // ── Health check ──────────────────────────────────────────────────────────────
 app.get("/", (req, res) => res.json({ status: "Chai Proxy running (mobile API)" }));
