@@ -70,18 +70,22 @@ app.get("/search", async (req, res) => {
 // ── POST /chat ────────────────────────────────────────────────────────────────
 app.post("/chat", async (req, res) => {
   try {
-    const { botId, message, conversationId } = req.body;
-    if (!botId || !message) {
-      return res.status(400).json({ error: "botId and message are required" });
-    }
-    const token = await getFreshToken();
-    const payload = {
-      user_uid:        CHAI_UID,
-      bot_uid:         botId,
-      conversation_id: conversationId || `${CHAI_UID}_${botId}`,
-      text:            message,
-      model:           "chai_v2",
-    };
+    const { botId, message, conversationId, messages } = req.body;
+if (!botId || !message) {
+  return res.status(400).json({ error: "botId and message are required" });
+}
+const token = await getFreshToken();
+const payload = {
+  user_uid: CHAI_UID,
+  bot_uid: botId,
+  conversation_id: conversationId || `${CHAI_UID}_${botId}`,
+  text: message,
+  model: "chai_v2",
+  chat_history: (messages || []).map(m => ({
+    role: m.role === 'user' ? 'user' : 'bot',
+    content: m.text
+  }))
+};
     console.log("→ Sending to bot-responder:", JSON.stringify(payload));
     const response = await fetch(`${BOT_RESPONDER}/send_message`, {
       method: "POST",
