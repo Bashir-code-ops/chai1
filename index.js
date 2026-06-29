@@ -9,10 +9,6 @@ const FIREBASE_API_KEY = "AIzaSyDlCazdn_bziqDVwQkDroR8eK4GVaEHawU";
 const CHAI_UID         = "5UjcH6R0zWYwzLciAX7lz9F3Sz02";
 const REFRESH_TOKEN    = "AMf-vBxABjgCQ0SoRCymcdUbckokYPr9aPJ7-zsy6cFeXMioykMeSSGJiF4Vpi1tqic6HqzfaTmNWDPAo1Z-WBAEFGAuY_tGRt_fyujgs4zhwj7FnvFIp-ZKWM4RsX8sO5qwVZ6gRVFn5eo8kehreZbOCblhhqMMqgaR-EgI_whH4uVWONzzR_QqZnOfWA_yRrEuxAQy4YwoA6znvXbLNz-v21MJbhrzLQiZ6Vc--XuUWqD9Z09f5W2KLfU-8Zq96LPygwE2LS-BLQCqrLCxFzQEVOLRH_422e68fhEbmwv3cvJitPo3LoPas1VO4XCAvULjjT0HC6SjbG6ko03H1VW-NOCCbOTpmlXfrvIUVO-g0bcCsCYLZIL0WMgz5V9PvJ1LYPz4QKBv";
 const BOT_RESPONDER    = "https://bot-responder-eu-shdxwd54ta-nw.a.run.app";
-const BOT_SERVICE      = "https://bot-service-us1-shdxwd54ta-uc.a.run.app";
-
-// ── API key protection ────────────────────────────────────────────────────────
-
 
 // ── Token cache ───────────────────────────────────────────────────────────────
 let cachedToken = null;
@@ -70,25 +66,18 @@ app.get("/search", async (req, res) => {
 // ── POST /chat ────────────────────────────────────────────────────────────────
 app.post("/chat", async (req, res) => {
   try {
-    const { botId, message, conversationId, messages } = req.body;
-if (!botId || !message) {
-  return res.status(400).json({ error: "botId and message are required" });
-}
-const token = await getFreshToken();
-const payload = {
-  user_uid: CHAI_UID,
-  bot_uid: botId,
-  conversation_id: conversationId || `${CHAI_UID}_${botId}`,
-  text: message,
-  model: "chai_v2",
-  memory: (messages || []).slice(-10).map(m => ({
-  sender: m.role === 'user' ? 'human' : 'bot',
-  message: m.text
-}))
-    role: m.role === 'user' ? 'user' : 'bot',
-    content: m.text
-  }))
-};
+    const { botId, message, conversationId } = req.body;
+    if (!botId || !message) {
+      return res.status(400).json({ error: "botId and message are required" });
+    }
+    const token = await getFreshToken();
+    const payload = {
+      user_uid:        CHAI_UID,
+      bot_uid:         botId,
+      conversation_id: conversationId || `${CHAI_UID}_${botId}`,
+      text:            message,
+      model:           "chai_v2",
+    };
     console.log("→ Sending to bot-responder:", JSON.stringify(payload));
     const response = await fetch(`${BOT_RESPONDER}/send_message`, {
       method: "POST",
