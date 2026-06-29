@@ -81,7 +81,10 @@ const payload = {
   conversation_id: conversationId || `${CHAI_UID}_${botId}`,
   text: message,
   model: "chai_v2",
-  chat_history: (messages || []).map(m => ({
+  memory: (messages || []).slice(-10).map(m => ({
+  sender: m.role === 'user' ? 'human' : 'bot',
+  message: m.text
+}))
     role: m.role === 'user' ? 'user' : 'bot',
     content: m.text
   }))
