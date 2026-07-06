@@ -129,8 +129,12 @@ app.get("/image", async (req, res) => {
     }
 
     const contentType = response.headers.get("content-type") || "";
-    if (!contentType.startsWith("image/")) {
-      console.error(`[/image] unexpected content-type "${contentType}" for ${imageUrl}`);
+    // Chai's own CDN (images.chai.ml) sometimes sends "application/octet-stream"
+    // for genuinely valid images, so we can't strictly require an "image/" prefix.
+    // Only reject content-types that are clearly NOT image data (html error pages, json, text).
+    const definitelyNotImage = /^(text\/|application\/json|application\/xml)/i.test(contentType);
+    if (definitelyNotImage) {
+      console.error(`[/image] rejected non-image content-type "${contentType}" for ${imageUrl}`);
       return res.status(502).json({
         error: `Upstream did not return an image (content-type: ${contentType})`,
         url: imageUrl,
@@ -138,7 +142,10 @@ app.get("/image", async (req, res) => {
     }
 
     const buffer = await response.arrayBuffer();
-    res.setHeader("Content-Type", contentType);
+    // If upstream sent a generic/octet-stream type, force a sane image content-type
+    // so the browser actually renders it instead of treating it as a download/blob.
+    const outgoingContentType = contentType.startsWith("image/") ? contentType : "image/jpeg";
+    res.setHeader("Content-Type", outgoingContentType);
     res.setHeader("Cache-Control", "public, max-age=86400");
     res.send(Buffer.from(buffer));
   } catch (err) {
