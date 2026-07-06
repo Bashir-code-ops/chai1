@@ -115,13 +115,34 @@ app.get("/token", async (req, res) => {
 app.get("/image", async (req, res) => {
   try {
     const imageUrl = decodeURIComponent(req.query.url);
-    const response = await fetch(imageUrl);
+    const response = await fetch(imageUrl, { redirect: "follow" });
+
+    console.log(`[/image] fetching: ${imageUrl}`);
+    console.log(`[/image] upstream status: ${response.status}, content-type: ${response.headers.get("content-type")}`);
+
+    if (!response.ok) {
+      console.error(`[/image] upstream failed with status ${response.status} for ${imageUrl}`);
+      return res.status(response.status).json({
+        error: `Upstream image fetch failed with status ${response.status}`,
+        url: imageUrl,
+      });
+    }
+
+    const contentType = response.headers.get("content-type") || "";
+    if (!contentType.startsWith("image/")) {
+      console.error(`[/image] unexpected content-type "${contentType}" for ${imageUrl}`);
+      return res.status(502).json({
+        error: `Upstream did not return an image (content-type: ${contentType})`,
+        url: imageUrl,
+      });
+    }
+
     const buffer = await response.arrayBuffer();
-    const contentType = response.headers.get("content-type") || "image/jpeg";
     res.setHeader("Content-Type", contentType);
     res.setHeader("Cache-Control", "public, max-age=86400");
     res.send(Buffer.from(buffer));
   } catch (err) {
+    console.error("[/image] error:", err.message);
     res.status(500).json({ error: err.message });
   }
 });
