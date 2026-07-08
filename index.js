@@ -37,7 +37,7 @@ app.get("/feed", async (req, res) => {
   try {
     const token = await getFreshToken();
     const response = await fetch(
-      "https://chai-feed-service-65663778556.us-central1.run.app/feeds/strict-or-lax-acquisition-resolved-feed",
+      "https://chai-feed-service-65663778556.us-central1.run.app/feeds/low-threshold-strict-or-more-data-collaborative-acquisition-resolved-feed",
       { headers: { Authorization: `Bearer ${token}` } }
     );
     const text = await response.text();
