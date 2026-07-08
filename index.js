@@ -40,9 +40,27 @@ app.get("/feed", async (req, res) => {
       "https://chai-feed-service-65663778556.us-central1.run.app/feeds/strict-or-lax-acquisition-resolved-feed",
       { headers: { Authorization: `Bearer ${token}` } }
     );
-    const data = await response.json();
-    res.status(response.status).json(data);
+    const text = await response.text();
+    console.log(`[/feed] upstream status: ${response.status}`);
+    if (!response.ok) {
+      console.error(`[/feed] upstream failed with status ${response.status}, body: ${text.substring(0, 500)}`);
+      return res.status(response.status).json({
+        error: `Upstream feed service failed with status ${response.status}`,
+        upstreamBody: text.substring(0, 500),
+      });
+    }
+    try {
+      const data = JSON.parse(text);
+      res.status(response.status).json(data);
+    } catch (parseErr) {
+      console.error(`[/feed] upstream returned non-JSON despite ${response.status}: ${text.substring(0, 500)}`);
+      res.status(502).json({
+        error: "Upstream feed service returned non-JSON response",
+        upstreamBody: text.substring(0, 500),
+      });
+    }
   } catch (err) {
+    console.error("[/feed] error:", err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -56,9 +74,27 @@ app.get("/search", async (req, res) => {
       `https://bot-service-us1-65663778556.us-central1.run.app/v2/search?text=${encodeURIComponent(query)}&limit=20&offset=${req.query.offset || 0}`,
       { headers: { Authorization: `Bearer ${token}` } }
     );
-    const data = await response.json();
-    res.status(response.status).json(data);
+    const text = await response.text();
+    console.log(`[/search] q="${query}" offset=${req.query.offset || 0} upstream status: ${response.status}`);
+    if (!response.ok) {
+      console.error(`[/search] upstream failed with status ${response.status}, body: ${text.substring(0, 500)}`);
+      return res.status(response.status).json({
+        error: `Upstream search service failed with status ${response.status}`,
+        upstreamBody: text.substring(0, 500),
+      });
+    }
+    try {
+      const data = JSON.parse(text);
+      res.status(response.status).json(data);
+    } catch (parseErr) {
+      console.error(`[/search] upstream returned non-JSON despite ${response.status}: ${text.substring(0, 500)}`);
+      res.status(502).json({
+        error: "Upstream search service returned non-JSON response",
+        upstreamBody: text.substring(0, 500),
+      });
+    }
   } catch (err) {
+    console.error("[/search] error:", err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -162,9 +198,27 @@ app.get("/user/:userId", async (req, res) => {
       `https://chai-user-service-65663778556.us-central1.run.app/users/${req.params.userId}`,
       { headers: { Authorization: `Bearer ${token}` } }
     );
-    const data = await response.json();
-    res.status(response.status).json(data);
+    const text = await response.text();
+    console.log(`[/user] userId=${req.params.userId} upstream status: ${response.status}`);
+    if (!response.ok) {
+      console.error(`[/user] upstream failed with status ${response.status}, body: ${text.substring(0, 500)}`);
+      return res.status(response.status).json({
+        error: `Upstream user service failed with status ${response.status}`,
+        upstreamBody: text.substring(0, 500),
+      });
+    }
+    try {
+      const data = JSON.parse(text);
+      res.status(response.status).json(data);
+    } catch (parseErr) {
+      console.error(`[/user] upstream returned non-JSON despite ${response.status}: ${text.substring(0, 500)}`);
+      res.status(502).json({
+        error: "Upstream user service returned non-JSON response",
+        upstreamBody: text.substring(0, 500),
+      });
+    }
   } catch (err) {
+    console.error("[/user] error:", err.message);
     res.status(500).json({ error: err.message });
   }
 });
