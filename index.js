@@ -37,7 +37,7 @@ app.get("/feed", async (req, res) => {
   try {
     const token = await getFreshToken();
     const response = await fetch(
-      "https://chai-feed-service-65663778556.us-central1.run.app/feeds/low-threshold-strict-or-more-data-collaborative-acquisition-resolved-feed",
+      "https://chai-feed-service-65663778556.us-central1.run.app/feeds/strict-or-lax-acquisition-resolved-feed",
       { headers: { Authorization: `Bearer ${token}` } }
     );
     const text = await response.text();
@@ -219,6 +219,123 @@ app.get("/user/:userId", async (req, res) => {
     }
   } catch (err) {
     console.error("[/user] error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /personas — list the user's saved personas ────────────────────────────
+app.get("/personas", async (req, res) => {
+  try {
+    const token = await getFreshToken();
+    const response = await fetch(
+      "https://chai-user-service-65663778556.us-central1.run.app/personas",
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    const text = await response.text();
+    console.log(`[/personas GET] upstream status: ${response.status}`);
+    if (!response.ok) {
+      console.error(`[/personas GET] upstream failed with status ${response.status}, body: ${text.substring(0, 500)}`);
+      return res.status(response.status).json({
+        error: `Upstream persona service failed with status ${response.status}`,
+        upstreamBody: text.substring(0, 500),
+      });
+    }
+    try {
+      res.status(response.status).json(JSON.parse(text));
+    } catch (parseErr) {
+      console.error(`[/personas GET] upstream returned non-JSON: ${text.substring(0, 500)}`);
+      res.status(502).json({ error: "Upstream persona service returned non-JSON response" });
+    }
+  } catch (err) {
+    console.error("[/personas GET] error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /personas — create a new persona ──────────────────────────────────────
+app.post("/personas", async (req, res) => {
+  try {
+    const { name, description, image_url } = req.body;
+    if (!name) {
+      return res.status(400).json({ error: "name is required" });
+    }
+    const token = await getFreshToken();
+    const payload = {
+      name,
+      description: description || "",
+      image_url: image_url || null,
+      is_system_persona: false,
+    };
+    console.log("[/personas POST] creating:", JSON.stringify(payload));
+    const response = await fetch(
+      "https://chai-user-service-65663778556.us-central1.run.app/personas",
+      {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      }
+    );
+    const text = await response.text();
+    console.log(`[/personas POST] upstream status: ${response.status}`);
+    if (!response.ok) {
+      console.error(`[/personas POST] upstream failed with status ${response.status}, body: ${text.substring(0, 500)}`);
+      return res.status(response.status).json({
+        error: `Upstream persona service failed with status ${response.status}`,
+        upstreamBody: text.substring(0, 500),
+      });
+    }
+    try {
+      res.status(response.status).json(JSON.parse(text));
+    } catch (parseErr) {
+      console.error(`[/personas POST] upstream returned non-JSON: ${text.substring(0, 500)}`);
+      res.status(502).json({ error: "Upstream persona service returned non-JSON response" });
+    }
+  } catch (err) {
+    console.error("[/personas POST] error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── PATCH /personas/default — set the active persona ───────────────────────────
+app.patch("/personas/default", async (req, res) => {
+  try {
+    const { default_persona_id } = req.body;
+    if (!default_persona_id) {
+      return res.status(400).json({ error: "default_persona_id is required" });
+    }
+    const token = await getFreshToken();
+    console.log("[/personas/default PATCH] setting default:", default_persona_id);
+    const response = await fetch(
+      "https://chai-user-service-65663778556.us-central1.run.app/personas/default",
+      {
+        method: "PATCH",
+        headers: {
+          "Authorization": `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ default_persona_id }),
+      }
+    );
+    const text = await response.text();
+    console.log(`[/personas/default PATCH] upstream status: ${response.status}`);
+    if (!response.ok) {
+      console.error(`[/personas/default PATCH] upstream failed with status ${response.status}, body: ${text.substring(0, 500)}`);
+      return res.status(response.status).json({
+        error: `Upstream persona service failed with status ${response.status}`,
+        upstreamBody: text.substring(0, 500),
+      });
+    }
+    try {
+      res.status(response.status).json(JSON.parse(text));
+    } catch (parseErr) {
+      console.error(`[/personas/default PATCH] upstream returned non-JSON: ${text.substring(0, 500)}`);
+      res.status(502).json({ error: "Upstream persona service returned non-JSON response" });
+    }
+  } catch (err) {
+    console.error("[/personas/default PATCH] error:", err.message);
     res.status(500).json({ error: err.message });
   }
 });
