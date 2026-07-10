@@ -150,6 +150,7 @@ app.post("/retry", async (req, res) => {
       bot_uid:         botId,
       conversation_id: conversationId,
       text:            message,
+      model:           "chai_v2",
       retry:           true,
     };
     console.log("→ Sending retry to bot-responder:", JSON.stringify(payload));
