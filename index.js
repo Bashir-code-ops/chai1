@@ -137,6 +137,44 @@ app.post("/chat", async (req, res) => {
   }
 });
 
+// ── POST /retry — regenerate the bot's last response ────────────────────────────
+app.post("/retry", async (req, res) => {
+  try {
+    const { botId, message, conversationId } = req.body;
+    if (!botId || !message || !conversationId) {
+      return res.status(400).json({ error: "botId, message, and conversationId are required" });
+    }
+    const token = await getFreshToken();
+    const payload = {
+      user_uid:        CHAI_UID,
+      bot_uid:         botId,
+      conversation_id: conversationId,
+      text:            message,
+      retry:           true,
+    };
+    console.log("→ Sending retry to bot-responder:", JSON.stringify(payload));
+    const response = await fetch(`${BOT_RESPONDER}/retry_message`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${token}`,
+        "Content-Type":  "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+    const text = await response.text();
+    console.log("← Bot-responder retry status:", response.status);
+    console.log("← Bot-responder retry body:", text.substring(0, 500));
+    try {
+      res.status(response.status).json(JSON.parse(text));
+    } catch {
+      res.status(response.status).send(text);
+    }
+  } catch (err) {
+    console.error("Retry error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── GET /token ────────────────────────────────────────────────────────────────
 app.get("/token", async (req, res) => {
   try {
