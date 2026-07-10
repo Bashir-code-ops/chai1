@@ -212,6 +212,34 @@ app.post("/edit", async (req, res) => {
   }
 });
 
+// ── DELETE /message — delete a specific message from a conversation ─────────────
+app.delete("/message", async (req, res) => {
+  try {
+    const { conversationId, messageId } = req.body;
+    if (!conversationId || !messageId) {
+      return res.status(400).json({ error: "conversationId and messageId are required" });
+    }
+    const token = await getFreshToken();
+    const url = `https://bot-responder-eu-65663778556.europe-west2.run.app/${conversationId}/messages/${messageId}`;
+    console.log("→ Deleting message:", url);
+    const response = await fetch(url, {
+      method: "DELETE",
+      headers: { "Authorization": `Bearer ${token}` },
+    });
+    const text = await response.text();
+    console.log("← Delete status:", response.status);
+    console.log("← Delete body:", text.substring(0, 500));
+    try {
+      res.status(response.status).json(JSON.parse(text));
+    } catch {
+      res.status(response.status).send(text);
+    }
+  } catch (err) {
+    console.error("Delete error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── GET /token ────────────────────────────────────────────────────────────────
 app.get("/token", async (req, res) => {
   try {
