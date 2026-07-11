@@ -224,7 +224,11 @@ app.delete("/message", async (req, res) => {
     console.log("→ Deleting message:", url);
     const response = await fetch(url, {
       method: "DELETE",
-      headers: { "Authorization": `Bearer ${token}` },
+      headers: {
+        "Authorization": `Bearer ${token}`,
+        "Content-Type": "application/json",
+        "idempotency-key": require("crypto").randomUUID(),
+      },
     });
     const text = await response.text();
     console.log("← Delete status:", response.status);
