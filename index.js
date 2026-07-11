@@ -195,6 +195,7 @@ app.post("/edit", async (req, res) => {
       headers: {
         "Authorization": `Bearer ${token}`,
         "Content-Type":  "application/json",
+        "idempotency-key": require("crypto").randomUUID(),
       },
       body: JSON.stringify(payload),
     });
@@ -240,6 +241,43 @@ app.delete("/message", async (req, res) => {
     }
   } catch (err) {
     console.error("Delete error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /history — fetch conversation message history (paginate) ──────────────
+app.post("/history", async (req, res) => {
+  try {
+    const { conversationId, limit, lastTs } = req.body;
+    if (!conversationId) {
+      return res.status(400).json({ error: "conversationId is required" });
+    }
+    const token = await getFreshToken();
+    const url = `${BOT_RESPONDER}/${conversationId}/paginate`;
+    const payload = {
+      user_uid: CHAI_UID,
+      limit: limit || 10,
+      last_ts: lastTs || null,
+    };
+    console.log("→ Fetching history:", url, JSON.stringify(payload));
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+    const text = await response.text();
+    console.log("← History status:", response.status);
+    console.log("← History body:", text.substring(0, 800));
+    try {
+      res.status(response.status).json(JSON.parse(text));
+    } catch {
+      res.status(response.status).send(text);
+    }
+  } catch (err) {
+    console.error("History error:", err.message);
     res.status(500).json({ error: err.message });
   }
 });
