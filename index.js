@@ -282,6 +282,42 @@ app.post("/history", async (req, res) => {
   }
 });
 
+// ── PATCH /memory — save bot memory/backstory for a conversation ────────────────
+app.patch("/memory", async (req, res) => {
+  try {
+    const { conversationId, backstory } = req.body;
+    if (!conversationId || backstory === undefined) {
+      return res.status(400).json({ error: "conversationId and backstory are required" });
+    }
+    const token = await getFreshToken();
+    const url = `${BOT_RESPONDER}/conversations/${conversationId}`;
+    const payload = {
+      user_uid: CHAI_UID,
+      bot_config: { backstory },
+    };
+    console.log("→ Saving memory:", url, JSON.stringify(payload));
+    const response = await fetch(url, {
+      method: "PATCH",
+      headers: {
+        "Authorization": `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+    const text = await response.text();
+    console.log("← Memory save status:", response.status);
+    console.log("← Memory save body:", text.substring(0, 500));
+    try {
+      res.status(response.status).json(JSON.parse(text));
+    } catch {
+      res.status(response.status).send(text);
+    }
+  } catch (err) {
+    console.error("Memory save error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── GET /token ────────────────────────────────────────────────────────────────
 app.get("/token", async (req, res) => {
   try {
