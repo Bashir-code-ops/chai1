@@ -103,15 +103,22 @@ app.get("/search", async (req, res) => {
 app.post("/chat", async (req, res) => {
   try {
     const { botId, message, conversationId } = req.body;
-    if (!botId || !message) {
-      return res.status(400).json({ error: "botId and message are required" });
+    if (!botId) {
+      return res.status(400).json({ error: "botId is required" });
     }
     const token = await getFreshToken();
+
+    // Ignore any conversationId that doesn't belong to the current account
+    // (e.g. left over in localStorage from a previously-used Chai account)
+    const safeConversationId = conversationId && conversationId.includes(CHAI_UID)
+      ? conversationId
+      : `${CHAI_UID}_${botId}`;
+
     const payload = {
       user_uid:        CHAI_UID,
       bot_uid:         botId,
-      conversation_id: conversationId || `${CHAI_UID}_${botId}`,
-      text:            message,
+      conversation_id: safeConversationId,
+      text:            message || "",
       model:           "chai_v2",
     };
     console.log("→ Sending to bot-responder:", JSON.stringify(payload));
@@ -145,10 +152,13 @@ app.post("/retry", async (req, res) => {
       return res.status(400).json({ error: "botId, message, and conversationId are required" });
     }
     const token = await getFreshToken();
+    const safeConversationId = conversationId && conversationId.includes(CHAI_UID)
+      ? conversationId
+      : `${CHAI_UID}_${botId}`;
     const payload = {
       user_uid:        CHAI_UID,
       bot_uid:         botId,
-      conversation_id: conversationId,
+      conversation_id: safeConversationId,
       text:            message,
       model:           "chai_v2",
     };
@@ -183,10 +193,13 @@ app.post("/edit", async (req, res) => {
       return res.status(400).json({ error: "botId, message, and conversationId are required" });
     }
     const token = await getFreshToken();
+    const safeConversationId = conversationId && conversationId.includes(CHAI_UID)
+      ? conversationId
+      : `${CHAI_UID}_${botId}`;
     const payload = {
       user_uid:        CHAI_UID,
       bot_uid:         botId,
-      conversation_id: conversationId,
+      conversation_id: safeConversationId,
       text:            message,
     };
     console.log("→ Sending edit to bot-responder:", JSON.stringify(payload));
