@@ -9,9 +9,18 @@ const FIREBASE_API_KEY = "AIzaSyDlCazdn_bziqDVwQkDroR8eK4GVaEHawU";
 const CHAI_UID         = "aBzTrfumzcgckMzHDhEOsX7ROdY2";
 const REFRESH_TOKEN="AMf-vBzzxSfVrwrQbZxfQUgzAKMkpx2BXjtSryY2NlSjVIBkuItZUIkC3poO4HQE0ITGhrFANiyQVKJO81SAwXxKUL_9wNVAQW6d28YgG93lOoHkm3LL3DvuMIIv5JxOIrM2ZB7pYY5QDeRxl-yzidwVenyrWfASQmRqvC0tzK8Kudfv5BkM3L-C7ORrN3elceV0eDOAoDr2QMRtCRJK_jrRlendhQS2lK84c0y_cwRgnED10K2GVovqgOHTBISgk_Y_sCk4CoCtSIlCUoCUOiHD942PdH1uZ2baHysjymyQlLNbNsSe00rn8z3bDr4igwTtgd3I95wBT_y2h83AvtI8Bo6N6kLSLg1G9shJ3sWQ1Hc2h7pPfpKf77Y5s_txnjf4TWmGJLyAQFsfGz4Z9mbfk2154dXZZQ";
 const BOT_RESPONDER    = "https://bot-responder-eu-shdxwd54ta-nw.a.run.app";
-const { SocksProxyAgent } = require('socks-proxy-agent');
+
+// ── US proxy (routes Chai calls through a US IP to bypass regional block) ────
 const US_PROXY = "socks5://23.94.123.223:1080";
-const proxyAgent = new SocksProxyAgent(US_PROXY);
+let proxyAgent = null;
+
+async function getProxyAgent() {
+  if (proxyAgent) return proxyAgent;
+  const { SocksProxyAgent } = await import('socks-proxy-agent');
+  proxyAgent = new SocksProxyAgent(US_PROXY);
+  return proxyAgent;
+}
+
 // ── Token cache ───────────────────────────────────────────────────────────────
 let cachedToken = null;
 let tokenExpiry = 0;
@@ -109,6 +118,7 @@ app.post("/chat", async (req, res) => {
       return res.status(400).json({ error: "botId is required" });
     }
     const token = await getFreshToken();
+    const agent = await getProxyAgent();
 
     // Ignore any conversationId that doesn't belong to the current account
     // (e.g. left over in localStorage from a previously-used Chai account)
@@ -126,7 +136,7 @@ app.post("/chat", async (req, res) => {
     console.log("→ Sending to bot-responder:", JSON.stringify(payload));
     const response = await fetch(`${BOT_RESPONDER}/send_message`, {
       method: "POST",
-      agent: proxyAgent,
+      agent: agent,
       headers: {
         "Authorization": `Bearer ${token}`,
         "Content-Type":  "application/json",
@@ -155,6 +165,7 @@ app.post("/retry", async (req, res) => {
       return res.status(400).json({ error: "botId, message, and conversationId are required" });
     }
     const token = await getFreshToken();
+    const agent = await getProxyAgent();
     const safeConversationId = conversationId && conversationId.includes(CHAI_UID)
       ? conversationId
       : `${CHAI_UID}_${botId}`;
@@ -168,6 +179,7 @@ app.post("/retry", async (req, res) => {
     console.log("→ Sending retry to bot-responder:", JSON.stringify(payload));
     const response = await fetch(`${BOT_RESPONDER}/retry_message`, {
       method: "POST",
+      agent: agent,
       headers: {
         "Authorization": `Bearer ${token}`,
         "Content-Type":  "application/json",
@@ -196,6 +208,7 @@ app.post("/edit", async (req, res) => {
       return res.status(400).json({ error: "botId, message, and conversationId are required" });
     }
     const token = await getFreshToken();
+    const agent = await getProxyAgent();
     const safeConversationId = conversationId && conversationId.includes(CHAI_UID)
       ? conversationId
       : `${CHAI_UID}_${botId}`;
@@ -208,6 +221,7 @@ app.post("/edit", async (req, res) => {
     console.log("→ Sending edit to bot-responder:", JSON.stringify(payload));
     const response = await fetch(`${BOT_RESPONDER}/edit_message`, {
       method: "POST",
+      agent: agent,
       headers: {
         "Authorization": `Bearer ${token}`,
         "Content-Type":  "application/json",
@@ -237,10 +251,12 @@ app.delete("/message", async (req, res) => {
       return res.status(400).json({ error: "conversationId and messageId are required" });
     }
     const token = await getFreshToken();
+    const agent = await getProxyAgent();
     const url = `https://bot-responder-eu-65663778556.europe-west2.run.app/${conversationId}/messages/${messageId}`;
     console.log("→ Deleting message:", url);
     const response = await fetch(url, {
       method: "DELETE",
+      agent: agent,
       headers: {
         "Authorization": `Bearer ${token}`,
         "Content-Type": "application/json",
@@ -269,6 +285,7 @@ app.post("/history", async (req, res) => {
       return res.status(400).json({ error: "conversationId is required" });
     }
     const token = await getFreshToken();
+    const agent = await getProxyAgent();
     const url = `${BOT_RESPONDER}/${conversationId}/paginate`;
     const payload = {
       user_uid: CHAI_UID,
@@ -278,6 +295,7 @@ app.post("/history", async (req, res) => {
     console.log("→ Fetching history:", url, JSON.stringify(payload));
     const response = await fetch(url, {
       method: "POST",
+      agent: agent,
       headers: {
         "Authorization": `Bearer ${token}`,
         "Content-Type": "application/json",
@@ -306,6 +324,7 @@ app.patch("/memory", async (req, res) => {
       return res.status(400).json({ error: "conversationId and backstory are required" });
     }
     const token = await getFreshToken();
+    const agent = await getProxyAgent();
     const url = `${BOT_RESPONDER}/conversations/${conversationId}`;
     const payload = {
       user_uid: CHAI_UID,
@@ -314,6 +333,7 @@ app.patch("/memory", async (req, res) => {
     console.log("→ Saving memory:", url, JSON.stringify(payload));
     const response = await fetch(url, {
       method: "PATCH",
+      agent: agent,
       headers: {
         "Authorization": `Bearer ${token}`,
         "Content-Type": "application/json",
