@@ -9,7 +9,9 @@ const FIREBASE_API_KEY = "AIzaSyDlCazdn_bziqDVwQkDroR8eK4GVaEHawU";
 const CHAI_UID         = "aBzTrfumzcgckMzHDhEOsX7ROdY2";
 const REFRESH_TOKEN="AMf-vBzzxSfVrwrQbZxfQUgzAKMkpx2BXjtSryY2NlSjVIBkuItZUIkC3poO4HQE0ITGhrFANiyQVKJO81SAwXxKUL_9wNVAQW6d28YgG93lOoHkm3LL3DvuMIIv5JxOIrM2ZB7pYY5QDeRxl-yzidwVenyrWfASQmRqvC0tzK8Kudfv5BkM3L-C7ORrN3elceV0eDOAoDr2QMRtCRJK_jrRlendhQS2lK84c0y_cwRgnED10K2GVovqgOHTBISgk_Y_sCk4CoCtSIlCUoCUOiHD942PdH1uZ2baHysjymyQlLNbNsSe00rn8z3bDr4igwTtgd3I95wBT_y2h83AvtI8Bo6N6kLSLg1G9shJ3sWQ1Hc2h7pPfpKf77Y5s_txnjf4TWmGJLyAQFsfGz4Z9mbfk2154dXZZQ";
 const BOT_RESPONDER    = "https://bot-responder-eu-shdxwd54ta-nw.a.run.app";
-
+const { SocksProxyAgent } = require('socks-proxy-agent');
+const US_PROXY = "socks5://23.94.123.223:1080";
+const proxyAgent = new SocksProxyAgent(US_PROXY);
 // ── Token cache ───────────────────────────────────────────────────────────────
 let cachedToken = null;
 let tokenExpiry = 0;
@@ -124,6 +126,7 @@ app.post("/chat", async (req, res) => {
     console.log("→ Sending to bot-responder:", JSON.stringify(payload));
     const response = await fetch(`${BOT_RESPONDER}/send_message`, {
       method: "POST",
+      agent: proxyAgent,
       headers: {
         "Authorization": `Bearer ${token}`,
         "Content-Type":  "application/json",
