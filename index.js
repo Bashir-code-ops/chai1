@@ -14,7 +14,7 @@ const BOT_RESPONDER    = "https://bot-responder-eu-shdxwd54ta-nw.a.run.app";
 // NOTE: Vercel's Node runtime uses native fetch (undici), which does NOT
 // support the old node-fetch `agent` option. We must use undici's own
 // ProxyAgent and pass it as `dispatcher` instead.
-const US_PROXY = "http://halxyrty:jwaaocr80yo2@198.23.243.226:6361/"; // free HTTP proxy, must be HTTP not socks5
+const US_PROXY = "http://64.23.188.3:3128"; // free HTTP proxy, must be HTTP not socks5
 let proxyDispatcher = null;
 
 async function getProxyDispatcher() {
@@ -74,9 +74,9 @@ app.get("/feed", async (req, res) => {
       });
     }
   } catch (err) {
-  console.error("Chat error:", err.message, err.cause || '');
-  res.status(500).json({ error: err.message, cause: err.cause?.message || null });
-}
+    console.error("[/feed] error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ── GET /search?q=xxx ─────────────────────────────────────────────────────────
@@ -155,8 +155,8 @@ app.post("/chat", async (req, res) => {
       res.status(response.status).send(text);
     }
   } catch (err) {
-    console.error("Chat error:", err.message);
-    res.status(500).json({ error: err.message });
+    console.error("Chat error:", err.message, err.cause || '');
+    res.status(500).json({ error: err.message, cause: err.cause?.message || null });
   }
 });
 
