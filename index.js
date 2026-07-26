@@ -74,9 +74,9 @@ app.get("/feed", async (req, res) => {
       });
     }
   } catch (err) {
-    console.error("[/feed] error:", err.message);
-    res.status(500).json({ error: err.message });
-  }
+  console.error("Chat error:", err.message, err.cause || '');
+  res.status(500).json({ error: err.message, cause: err.cause?.message || null });
+}
 });
 
 // ── GET /search?q=xxx ─────────────────────────────────────────────────────────
