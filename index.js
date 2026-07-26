@@ -16,7 +16,7 @@ const BOT_RESPONDER    = "https://bot-responder-eu-shdxwd54ta-nw.a.run.app";
 // to set the proxy as the GLOBAL dispatcher once at startup — after that,
 // every normal `fetch()` call (including the built-in global one) routes
 // through the proxy automatically, with no extra options needed.
-const US_PROXY = "http://halxyrty:jwaaocr80yo2@198.23.243.226:6361/";
+const US_PROXY = "http://halxyrty:jwaaocr80yo2@191.96.254.138:6185/";
 let proxyReady = null;
 
 async function ensureProxyReady() {
