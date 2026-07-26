@@ -16,7 +16,7 @@ const BOT_RESPONDER    = "https://bot-responder-eu-shdxwd54ta-nw.a.run.app";
 // /image last time. This version creates a SEPARATE proxied fetch function
 // that is only used for the one call to Chai's bot-responder, leaving the
 // normal global `fetch` completely untouched for every other route.
-const US_PROXY = "http://halxyrty:jwaaocr80yo2@191.96.254.138:6185/";
+const US_PROXY = "http://halxyrty:jwaaocr80yo2@198.23.243.226:6361/";
 let scopedProxyFetch = null;
 
 async function getScopedProxyFetch() {
