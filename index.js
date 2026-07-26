@@ -11,17 +11,23 @@ const REFRESH_TOKEN="AMf-vBzzxSfVrwrQbZxfQUgzAKMkpx2BXjtSryY2NlSjVIBkuItZUIkC3po
 const BOT_RESPONDER    = "https://bot-responder-eu-shdxwd54ta-nw.a.run.app";
 
 // ── US proxy (routes Chai calls through a US IP to bypass regional block) ────
-// NOTE: Vercel's Node runtime uses native fetch (undici), which does NOT
-// support the old node-fetch `agent` option. We must use undici's own
-// ProxyAgent and pass it as `dispatcher` instead.
-const US_PROXY = "http://64.23.188.3:3128"; // free HTTP proxy, must be HTTP not socks5
+// IMPORTANT: The global `fetch` on Vercel's Node runtime is a *different*
+// internal build of undici than the one you `npm install`. Mixing a
+// separately-installed undici's ProxyAgent with the global fetch causes
+// "invalid onRequestStart method" errors. Fix: use undici's own `fetch`
+// function too, so the dispatcher and fetch implementation always match.
+const US_PROXY = "http://halxyrty:jwaaocr80yo2@198.23.243.226:6361/";
 let proxyDispatcher = null;
+let undiciFetch = null;
 
-async function getProxyDispatcher() {
-  if (proxyDispatcher) return proxyDispatcher;
-  const { ProxyAgent } = await import('undici');
-  proxyDispatcher = new ProxyAgent(US_PROXY);
-  return proxyDispatcher;
+async function getProxiedFetch() {
+  if (proxyDispatcher && undiciFetch) {
+    return { dispatcher: proxyDispatcher, fetch: undiciFetch };
+  }
+  const undici = await import('undici');
+  proxyDispatcher = new undici.ProxyAgent(US_PROXY);
+  undiciFetch = undici.fetch;
+  return { dispatcher: proxyDispatcher, fetch: undiciFetch };
 }
 
 // ── Token cache ───────────────────────────────────────────────────────────────
@@ -121,7 +127,7 @@ app.post("/chat", async (req, res) => {
       return res.status(400).json({ error: "botId is required" });
     }
     const token = await getFreshToken();
-    const dispatcher = await getProxyDispatcher();
+    const { dispatcher, fetch: proxiedFetch } = await getProxiedFetch();
 
     // Ignore any conversationId that doesn't belong to the current account
     // (e.g. left over in localStorage from a previously-used Chai account)
@@ -137,7 +143,7 @@ app.post("/chat", async (req, res) => {
       model:           "chai_v2",
     };
     console.log("→ Sending to bot-responder:", JSON.stringify(payload));
-    const response = await fetch(`${BOT_RESPONDER}/send_message`, {
+    const response = await proxiedFetch(`${BOT_RESPONDER}/send_message`, {
       method: "POST",
       dispatcher: dispatcher,
       headers: {
@@ -168,7 +174,7 @@ app.post("/retry", async (req, res) => {
       return res.status(400).json({ error: "botId, message, and conversationId are required" });
     }
     const token = await getFreshToken();
-    const dispatcher = await getProxyDispatcher();
+    const { dispatcher, fetch: proxiedFetch } = await getProxiedFetch();
     const safeConversationId = conversationId && conversationId.includes(CHAI_UID)
       ? conversationId
       : `${CHAI_UID}_${botId}`;
@@ -180,7 +186,7 @@ app.post("/retry", async (req, res) => {
       model:           "chai_v2",
     };
     console.log("→ Sending retry to bot-responder:", JSON.stringify(payload));
-    const response = await fetch(`${BOT_RESPONDER}/retry_message`, {
+    const response = await proxiedFetch(`${BOT_RESPONDER}/retry_message`, {
       method: "POST",
       dispatcher: dispatcher,
       headers: {
@@ -211,7 +217,7 @@ app.post("/edit", async (req, res) => {
       return res.status(400).json({ error: "botId, message, and conversationId are required" });
     }
     const token = await getFreshToken();
-    const dispatcher = await getProxyDispatcher();
+    const { dispatcher, fetch: proxiedFetch } = await getProxiedFetch();
     const safeConversationId = conversationId && conversationId.includes(CHAI_UID)
       ? conversationId
       : `${CHAI_UID}_${botId}`;
@@ -222,7 +228,7 @@ app.post("/edit", async (req, res) => {
       text:            message,
     };
     console.log("→ Sending edit to bot-responder:", JSON.stringify(payload));
-    const response = await fetch(`${BOT_RESPONDER}/edit_message`, {
+    const response = await proxiedFetch(`${BOT_RESPONDER}/edit_message`, {
       method: "POST",
       dispatcher: dispatcher,
       headers: {
@@ -254,10 +260,10 @@ app.delete("/message", async (req, res) => {
       return res.status(400).json({ error: "conversationId and messageId are required" });
     }
     const token = await getFreshToken();
-    const dispatcher = await getProxyDispatcher();
+    const { dispatcher, fetch: proxiedFetch } = await getProxiedFetch();
     const url = `https://bot-responder-eu-65663778556.europe-west2.run.app/${conversationId}/messages/${messageId}`;
     console.log("→ Deleting message:", url);
-    const response = await fetch(url, {
+    const response = await proxiedFetch(url, {
       method: "DELETE",
       dispatcher: dispatcher,
       headers: {
@@ -288,7 +294,7 @@ app.post("/history", async (req, res) => {
       return res.status(400).json({ error: "conversationId is required" });
     }
     const token = await getFreshToken();
-    const dispatcher = await getProxyDispatcher();
+    const { dispatcher, fetch: proxiedFetch } = await getProxiedFetch();
     const url = `${BOT_RESPONDER}/${conversationId}/paginate`;
     const payload = {
       user_uid: CHAI_UID,
@@ -296,7 +302,7 @@ app.post("/history", async (req, res) => {
       last_ts: lastTs || null,
     };
     console.log("→ Fetching history:", url, JSON.stringify(payload));
-    const response = await fetch(url, {
+    const response = await proxiedFetch(url, {
       method: "POST",
       dispatcher: dispatcher,
       headers: {
@@ -327,14 +333,14 @@ app.patch("/memory", async (req, res) => {
       return res.status(400).json({ error: "conversationId and backstory are required" });
     }
     const token = await getFreshToken();
-    const dispatcher = await getProxyDispatcher();
+    const { dispatcher, fetch: proxiedFetch } = await getProxiedFetch();
     const url = `${BOT_RESPONDER}/conversations/${conversationId}`;
     const payload = {
       user_uid: CHAI_UID,
       bot_config: { backstory },
     };
     console.log("→ Saving memory:", url, JSON.stringify(payload));
-    const response = await fetch(url, {
+    const response = await proxiedFetch(url, {
       method: "PATCH",
       dispatcher: dispatcher,
       headers: {
