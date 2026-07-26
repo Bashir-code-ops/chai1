@@ -6,9 +6,27 @@ app.use(express.json());
 
 // ── Credentials ──────────────────────────────────────────────────────────────
 const FIREBASE_API_KEY = "AIzaSyDlCazdn_bziqDVwQkDroR8eK4GVaEHawU";
-const CHAI_UID         = "5UjcH6R0zWYwzLciAX7lz9F3Sz02";
-const REFRESH_TOKEN    = "AMf-vBxABjgCQ0SoRCymcdUbckokYPr9aPJ7-zsy6cFeXMioykMeSSGJiF4Vpi1tqic6HqzfaTmNWDPAo1Z-WBAEFGAuY_tGRt_fyujgs4zhwj7FnvFIp-ZKWM4RsX8sO5qwVZ6gRVFn5eo8kehreZbOCblhhqMMqgaR-EgI_whH4uVWONzzR_QqZnOfWA_yRrEuxAQy4YwoA6znvXbLNz-v21MJbhrzLQiZ6Vc--XuUWqD9Z09f5W2KLfU-8Zq96LPygwE2LS-BLQCqrLCxFzQEVOLRH_422e68fhEbmwv3cvJitPo3LoPas1VO4XCAvULjjT0HC6SjbG6ko03H1VW-NOCCbOTpmlXfrvIUVO-g0bcCsCYLZIL0WMgz5V9PvJ1LYPz4QKBv";
+const CHAI_UID         = "aBzTrfumzcgckMzHDhEOsX7ROdY2";
+const REFRESH_TOKEN="AMf-vBzzxSfVrwrQbZxfQUgzAKMkpx2BXjtSryY2NlSjVIBkuItZUIkC3poO4HQE0ITGhrFANiyQVKJO81SAwXxKUL_9wNVAQW6d28YgG93lOoHkm3LL3DvuMIIv5JxOIrM2ZB7pYY5QDeRxl-yzidwVenyrWfASQmRqvC0tzK8Kudfv5BkM3L-C7ORrN3elceV0eDOAoDr2QMRtCRJK_jrRlendhQS2lK84c0y_cwRgnED10K2GVovqgOHTBISgk_Y_sCk4CoCtSIlCUoCUOiHD942PdH1uZ2baHysjymyQlLNbNsSe00rn8z3bDr4igwTtgd3I95wBT_y2h83AvtI8Bo6N6kLSLg1G9shJ3sWQ1Hc2h7pPfpKf77Y5s_txnjf4TWmGJLyAQFsfGz4Z9mbfk2154dXZZQ";
 const BOT_RESPONDER    = "https://bot-responder-eu-shdxwd54ta-nw.a.run.app";
+
+// ── US proxy (routes Chai calls through a US IP to bypass regional block) ────
+// Passing a per-call `dispatcher` option caused version-mismatch errors
+// ("invalid onRequestStart method") on Vercel's runtime. The reliable fix is
+// to set the proxy as the GLOBAL dispatcher once at startup — after that,
+// every normal `fetch()` call (including the built-in global one) routes
+// through the proxy automatically, with no extra options needed.
+const US_PROXY = "http://halxyrty:jwaaocr80yo2@191.96.254.138:6185/";
+let proxyReady = null;
+
+async function ensureProxyReady() {
+  if (proxyReady) return proxyReady;
+  proxyReady = import('undici').then(({ ProxyAgent, setGlobalDispatcher }) => {
+    setGlobalDispatcher(new ProxyAgent(US_PROXY));
+    console.log("✅ Global proxy dispatcher set");
+  });
+  return proxyReady;
+}
 
 // ── Token cache ───────────────────────────────────────────────────────────────
 let cachedToken = null;
@@ -103,15 +121,23 @@ app.get("/search", async (req, res) => {
 app.post("/chat", async (req, res) => {
   try {
     const { botId, message, conversationId } = req.body;
-    if (!botId || !message) {
-      return res.status(400).json({ error: "botId and message are required" });
+    if (!botId) {
+      return res.status(400).json({ error: "botId is required" });
     }
     const token = await getFreshToken();
+    await ensureProxyReady();
+
+    // Ignore any conversationId that doesn't belong to the current account
+    // (e.g. left over in localStorage from a previously-used Chai account)
+    const safeConversationId = conversationId && conversationId.includes(CHAI_UID)
+      ? conversationId
+      : `${CHAI_UID}_${botId}`;
+
     const payload = {
       user_uid:        CHAI_UID,
       bot_uid:         botId,
-      conversation_id: conversationId || `${CHAI_UID}_${botId}`,
-      text:            message,
+      conversation_id: safeConversationId,
+      text:            message || "",
       model:           "chai_v2",
     };
     console.log("→ Sending to bot-responder:", JSON.stringify(payload));
@@ -132,8 +158,8 @@ app.post("/chat", async (req, res) => {
       res.status(response.status).send(text);
     }
   } catch (err) {
-    console.error("Chat error:", err.message);
-    res.status(500).json({ error: err.message });
+    console.error("Chat error:", err.message, err.cause || '');
+    res.status(500).json({ error: err.message, cause: err.cause?.message || null });
   }
 });
 
@@ -145,10 +171,14 @@ app.post("/retry", async (req, res) => {
       return res.status(400).json({ error: "botId, message, and conversationId are required" });
     }
     const token = await getFreshToken();
+    await ensureProxyReady();
+    const safeConversationId = conversationId && conversationId.includes(CHAI_UID)
+      ? conversationId
+      : `${CHAI_UID}_${botId}`;
     const payload = {
       user_uid:        CHAI_UID,
       bot_uid:         botId,
-      conversation_id: conversationId,
+      conversation_id: safeConversationId,
       text:            message,
       model:           "chai_v2",
     };
@@ -183,10 +213,14 @@ app.post("/edit", async (req, res) => {
       return res.status(400).json({ error: "botId, message, and conversationId are required" });
     }
     const token = await getFreshToken();
+    await ensureProxyReady();
+    const safeConversationId = conversationId && conversationId.includes(CHAI_UID)
+      ? conversationId
+      : `${CHAI_UID}_${botId}`;
     const payload = {
       user_uid:        CHAI_UID,
       bot_uid:         botId,
-      conversation_id: conversationId,
+      conversation_id: safeConversationId,
       text:            message,
     };
     console.log("→ Sending edit to bot-responder:", JSON.stringify(payload));
@@ -221,6 +255,7 @@ app.delete("/message", async (req, res) => {
       return res.status(400).json({ error: "conversationId and messageId are required" });
     }
     const token = await getFreshToken();
+    await ensureProxyReady();
     const url = `https://bot-responder-eu-65663778556.europe-west2.run.app/${conversationId}/messages/${messageId}`;
     console.log("→ Deleting message:", url);
     const response = await fetch(url, {
@@ -253,6 +288,7 @@ app.post("/history", async (req, res) => {
       return res.status(400).json({ error: "conversationId is required" });
     }
     const token = await getFreshToken();
+    await ensureProxyReady();
     const url = `${BOT_RESPONDER}/${conversationId}/paginate`;
     const payload = {
       user_uid: CHAI_UID,
@@ -290,6 +326,7 @@ app.patch("/memory", async (req, res) => {
       return res.status(400).json({ error: "conversationId and backstory are required" });
     }
     const token = await getFreshToken();
+    await ensureProxyReady();
     const url = `${BOT_RESPONDER}/conversations/${conversationId}`;
     const payload = {
       user_uid: CHAI_UID,
@@ -527,4 +564,4 @@ app.get("/", (req, res) => res.json({ status: "Chai Proxy running (mobile API)" 
 if (require.main === module) {
   app.listen(3001, () => console.log("Chai Proxy running on http://localhost:3001"));
 }
-module.exports = app;
+module.exports = app;\
