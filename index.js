@@ -14,7 +14,7 @@ const BOT_RESPONDER    = "https://bot-responder-eu-shdxwd54ta-nw.a.run.app";
 // NOTE: Vercel's Node runtime uses native fetch (undici), which does NOT
 // support the old node-fetch `agent` option. We must use undici's own
 // ProxyAgent and pass it as `dispatcher` instead.
-const US_PROXY = "http://157.230.134.174:3128"; // free HTTP proxy, must be HTTP not socks5
+const US_PROXY = "http://54.164.50.201:88"; // free HTTP proxy, must be HTTP not socks5
 let proxyDispatcher = null;
 
 async function getProxyDispatcher() {
