@@ -16,7 +16,7 @@ const BOT_RESPONDER    = "https://bot-responder-eu-shdxwd54ta-nw.a.run.app";
 // to set the proxy as the GLOBAL dispatcher once at startup — after that,
 // every normal `fetch()` call (including the built-in global one) routes
 // through the proxy automatically, with no extra options needed.
-const US_PROXY = "http://halxyrty:jwaaocr80yo2@191.96.254.138:6185/";
+const US_PROXY = "http://halxyrty:jwaaocr80yo2@198.23.243.226:6361/";
 let proxyReady = null;
 
 async function ensureProxyReady() {
@@ -564,4 +564,4 @@ app.get("/", (req, res) => res.json({ status: "Chai Proxy running (mobile API)" 
 if (require.main === module) {
   app.listen(3001, () => console.log("Chai Proxy running on http://localhost:3001"));
 }
-module.exports = app;\
+module.exports = app;
