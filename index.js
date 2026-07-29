@@ -8,7 +8,7 @@ app.use(express.json());
 const FIREBASE_API_KEY = "AIzaSyDlCazdn_bziqDVwQkDroR8eK4GVaEHawU";
 const CHAI_UID         = "aBzTrfumzcgckMzHDhEOsX7ROdY2";
 const REFRESH_TOKEN="AMf-vBzzxSfVrwrQbZxfQUgzAKMkpx2BXjtSryY2NlSjVIBkuItZUIkC3poO4HQE0ITGhrFANiyQVKJO81SAwXxKUL_9wNVAQW6d28YgG93lOoHkm3LL3DvuMIIv5JxOIrM2ZB7pYY5QDeRxl-yzidwVenyrWfASQmRqvC0tzK8Kudfv5BkM3L-C7ORrN3elceV0eDOAoDr2QMRtCRJK_jrRlendhQS2lK84c0y_cwRgnED10K2GVovqgOHTBISgk_Y_sCk4CoCtSIlCUoCUOiHD942PdH1uZ2baHysjymyQlLNbNsSe00rn8z3bDr4igwTtgd3I95wBT_y2h83AvtI8Bo6N6kLSLg1G9shJ3sWQ1Hc2h7pPfpKf77Y5s_txnjf4TWmGJLyAQFsfGz4Z9mbfk2154dXZZQ";
-const BOT_RESPONDER    = "http://67.220.85.109:80";
+const BOT_RESPONDER    = "https://bot-responder-eu-shdxwd54ta-nw.a.run.app";
 
 // ── US proxy (routes ONLY the /chat call through a proxied fetch) ────────────
 // IMPORTANT: setGlobalDispatcher() affects ALL fetch calls on this server
@@ -141,7 +141,32 @@ app.post("/chat", async (req, res) => {
       bot_uid:         botId,
       conversation_id: safeConversationId,
       text:            message || "",
-      model:           "chai_v2",
+      model:           "default",
+      guanaco:         false,
+      remote_config_ids: [
+        "",
+        "default",
+        "default",
+        "default",
+        "premium_30_ultra_70",
+        "default",
+        "20260727_compliance_ai_android_existing_users_gemma4_moderation_with_glm5_bo1_as_initial_messages_and_regex_and",
+        "20260629_virtual_currency_new_users_and_baseline_and",
+        "20260701_combined_ad_frequency_functions_test_new_users_messages_before_ad_by_volume",
+        "ads_every_16_messages_for_us_users_rollout_signed_up_after_07182025_16_messages_per_ad",
+        "0311_free_trial_temu_usa_rollout_and"
+      ],
+      user_state: {
+        account_creation_timestamp: 1783642170503,
+        location: "/",
+        operating_system: "android",
+        nsfw_enabled: true,
+        app_version: "0.4.380",
+        appsflyer_uid: "1785368765507-1823846103555474666",
+        device_id: "1b1e812a7324824b",
+        subscribed: false,
+        ultra: false
+      }
     };
     console.log("→ Sending to bot-responder:", JSON.stringify(payload));
     const response = await proxiedFetch(`${BOT_RESPONDER}/send_message`, {
