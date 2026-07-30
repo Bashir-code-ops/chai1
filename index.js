@@ -6,30 +6,9 @@ app.use(express.json());
 
 // ── Credentials ──────────────────────────────────────────────────────────────
 const FIREBASE_API_KEY = "AIzaSyDlCazdn_bziqDVwQkDroR8eK4GVaEHawU";
-const CHAI_UID         = "aBzTrfumzcgckMzHDhEOsX7ROdY2";
-const REFRESH_TOKEN="AMf-vBzzxSfVrwrQbZxfQUgzAKMkpx2BXjtSryY2NlSjVIBkuItZUIkC3poO4HQE0ITGhrFANiyQVKJO81SAwXxKUL_9wNVAQW6d28YgG93lOoHkm3LL3DvuMIIv5JxOIrM2ZB7pYY5QDeRxl-yzidwVenyrWfASQmRqvC0tzK8Kudfv5BkM3L-C7ORrN3elceV0eDOAoDr2QMRtCRJK_jrRlendhQS2lK84c0y_cwRgnED10K2GVovqgOHTBISgk_Y_sCk4CoCtSIlCUoCUOiHD942PdH1uZ2baHysjymyQlLNbNsSe00rn8z3bDr4igwTtgd3I95wBT_y2h83AvtI8Bo6N6kLSLg1G9shJ3sWQ1Hc2h7pPfpKf77Y5s_txnjf4TWmGJLyAQFsfGz4Z9mbfk2154dXZZQ";
+const CHAI_UID         = "5UjcH6R0zWYwzLciAX7lz9F3Sz02";
+const REFRESH_TOKEN    = "AMf-vBxABjgCQ0SoRCymcdUbckokYPr9aPJ7-zsy6cFeXMioykMeSSGJiF4Vpi1tqic6HqzfaTmNWDPAo1Z-WBAEFGAuY_tGRt_fyujgs4zhwj7FnvFIp-ZKWM4RsX8sO5qwVZ6gRVFn5eo8kehreZbOCblhhqMMqgaR-EgI_whH4uVWONzzR_QqZnOfWA_yRrEuxAQy4YwoA6znvXbLNz-v21MJbhrzLQiZ6Vc--XuUWqD9Z09f5W2KLfU-8Zq96LPygwE2LS-BLQCqrLCxFzQEVOLRH_422e68fhEbmwv3cvJitPo3LoPas1VO4XCAvULjjT0HC6SjbG6ko03H1VW-NOCCbOTpmlXfrvIUVO-g0bcCsCYLZIL0WMgz5V9PvJ1LYPz4QKBv";
 const BOT_RESPONDER    = "https://bot-responder-eu-shdxwd54ta-nw.a.run.app";
-
-// ── US proxy (routes ONLY the /chat call through a proxied fetch) ────────────
-// IMPORTANT: setGlobalDispatcher() affects ALL fetch calls on this server
-// instance (Vercel reuses warm instances), which broke /feed, /search, and
-// /image last time. This version creates a SEPARATE proxied fetch function
-// that is only used for the one call to Chai's bot-responder, leaving the
-// normal global `fetch` completely untouched for every other route.
-const US_PROXY = "http://halxyrty:jwaaocr80yo2@191.96.254.138:6185/";
-let scopedProxyFetch = null;
-
-async function getScopedProxyFetch() {
-  if (scopedProxyFetch) return scopedProxyFetch;
-  const { ProxyAgent, fetch: undiciFetch } = await import('undici');
-  const dispatcher = new ProxyAgent(US_PROXY);
-  // Wrap undici's own fetch with the dispatcher baked in, so callers never
-  // need to pass a `dispatcher` option themselves (which caused the earlier
-  // version-mismatch bug).
-  scopedProxyFetch = (url, options = {}) => undiciFetch(url, { ...options, dispatcher });
-  console.log("✅ Scoped proxy fetch ready (not global)");
-  return scopedProxyFetch;
-}
 
 // ── Token cache ───────────────────────────────────────────────────────────────
 let cachedToken = null;
@@ -124,52 +103,19 @@ app.get("/search", async (req, res) => {
 app.post("/chat", async (req, res) => {
   try {
     const { botId, message, conversationId } = req.body;
-    if (!botId) {
-      return res.status(400).json({ error: "botId is required" });
+    if (!botId || !message) {
+      return res.status(400).json({ error: "botId and message are required" });
     }
     const token = await getFreshToken();
-    const proxiedFetch = await getScopedProxyFetch();
-
-    // Ignore any conversationId that doesn't belong to the current account
-    // (e.g. left over in localStorage from a previously-used Chai account)
-    const safeConversationId = conversationId && conversationId.includes(CHAI_UID)
-      ? conversationId
-      : `${CHAI_UID}_${botId}`;
-
     const payload = {
       user_uid:        CHAI_UID,
       bot_uid:         botId,
-      conversation_id: safeConversationId,
-      text:            message || "",
-      model:           "default",
-      guanaco:         false,
-      remote_config_ids: [
-        "",
-        "default",
-        "default",
-        "default",
-        "premium_30_ultra_70",
-        "default",
-        "20260727_compliance_ai_android_existing_users_gemma4_moderation_with_glm5_bo1_as_initial_messages_and_regex_and",
-        "20260629_virtual_currency_new_users_and_baseline_and",
-        "20260701_combined_ad_frequency_functions_test_new_users_messages_before_ad_by_volume",
-        "ads_every_16_messages_for_us_users_rollout_signed_up_after_07182025_16_messages_per_ad",
-        "0311_free_trial_temu_usa_rollout_and"
-      ],
-      user_state: {
-        account_creation_timestamp: 1783642170503,
-        location: "/",
-        operating_system: "android",
-        nsfw_enabled: true,
-        app_version: "0.4.380",
-        appsflyer_uid: "1785368765507-1823846103555474666",
-        device_id: "1b1e812a7324824b",
-        subscribed: false,
-        ultra: false
-      }
+      conversation_id: conversationId || `${CHAI_UID}_${botId}`,
+      text:            message,
+      model:           "chai_v2",
     };
     console.log("→ Sending to bot-responder:", JSON.stringify(payload));
-    const response = await proxiedFetch(`${BOT_RESPONDER}/send_message`, {
+    const response = await fetch(`${BOT_RESPONDER}/send_message`, {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${token}`,
@@ -186,8 +132,8 @@ app.post("/chat", async (req, res) => {
       res.status(response.status).send(text);
     }
   } catch (err) {
-    console.error("Chat error:", err.message, err.cause || '');
-    res.status(500).json({ error: err.message, cause: err.cause?.message || null });
+    console.error("Chat error:", err.message);
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -199,19 +145,15 @@ app.post("/retry", async (req, res) => {
       return res.status(400).json({ error: "botId, message, and conversationId are required" });
     }
     const token = await getFreshToken();
-    const proxiedFetch = await getScopedProxyFetch();
-    const safeConversationId = conversationId && conversationId.includes(CHAI_UID)
-      ? conversationId
-      : `${CHAI_UID}_${botId}`;
     const payload = {
       user_uid:        CHAI_UID,
       bot_uid:         botId,
-      conversation_id: safeConversationId,
+      conversation_id: conversationId,
       text:            message,
       model:           "chai_v2",
     };
     console.log("→ Sending retry to bot-responder:", JSON.stringify(payload));
-    const response = await proxiedFetch(`${BOT_RESPONDER}/retry_message`, {
+    const response = await fetch(`${BOT_RESPONDER}/retry_message`, {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${token}`,
@@ -241,18 +183,14 @@ app.post("/edit", async (req, res) => {
       return res.status(400).json({ error: "botId, message, and conversationId are required" });
     }
     const token = await getFreshToken();
-    const proxiedFetch = await getScopedProxyFetch();
-    const safeConversationId = conversationId && conversationId.includes(CHAI_UID)
-      ? conversationId
-      : `${CHAI_UID}_${botId}`;
     const payload = {
       user_uid:        CHAI_UID,
       bot_uid:         botId,
-      conversation_id: safeConversationId,
+      conversation_id: conversationId,
       text:            message,
     };
     console.log("→ Sending edit to bot-responder:", JSON.stringify(payload));
-    const response = await proxiedFetch(`${BOT_RESPONDER}/edit_message`, {
+    const response = await fetch(`${BOT_RESPONDER}/edit_message`, {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${token}`,
@@ -283,10 +221,9 @@ app.delete("/message", async (req, res) => {
       return res.status(400).json({ error: "conversationId and messageId are required" });
     }
     const token = await getFreshToken();
-    const proxiedFetch = await getScopedProxyFetch();
     const url = `https://bot-responder-eu-65663778556.europe-west2.run.app/${conversationId}/messages/${messageId}`;
     console.log("→ Deleting message:", url);
-    const response = await proxiedFetch(url, {
+    const response = await fetch(url, {
       method: "DELETE",
       headers: {
         "Authorization": `Bearer ${token}`,
@@ -316,7 +253,6 @@ app.post("/history", async (req, res) => {
       return res.status(400).json({ error: "conversationId is required" });
     }
     const token = await getFreshToken();
-    const proxiedFetch = await getScopedProxyFetch();
     const url = `${BOT_RESPONDER}/${conversationId}/paginate`;
     const payload = {
       user_uid: CHAI_UID,
@@ -324,7 +260,7 @@ app.post("/history", async (req, res) => {
       last_ts: lastTs || null,
     };
     console.log("→ Fetching history:", url, JSON.stringify(payload));
-    const response = await proxiedFetch(url, {
+    const response = await fetch(url, {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${token}`,
@@ -354,14 +290,13 @@ app.patch("/memory", async (req, res) => {
       return res.status(400).json({ error: "conversationId and backstory are required" });
     }
     const token = await getFreshToken();
-    const proxiedFetch = await getScopedProxyFetch();
     const url = `${BOT_RESPONDER}/conversations/${conversationId}`;
     const payload = {
       user_uid: CHAI_UID,
       bot_config: { backstory },
     };
     console.log("→ Saving memory:", url, JSON.stringify(payload));
-    const response = await proxiedFetch(url, {
+    const response = await fetch(url, {
       method: "PATCH",
       headers: {
         "Authorization": `Bearer ${token}`,
