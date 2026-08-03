@@ -172,8 +172,8 @@ app.post("/chat", async (req, res) => {
 
 // ── POST /token — set the auth token / refresh token ─────────────────────────
 // Body can include any of: { token, refreshToken, expiresIn }
-// - token:        eyJhbGciOiJSUzI1NiIsImtpZCI6IjIwY2FkODZkNzY5ZmFkZTViODkxNmQ5Y2U1MDc0YzgyMGYwNjdkNTIiLCJ0eXAiOiJKV1QifQ.eyJuYW1lIjoiRmRfR29PZF8gMTQiLCJwaWN0dXJlIjoiaHR0cHM6Ly9saDMuZ29vZ2xldXNlcmNvbnRlbnQuY29tL2EvQUNnOG9jSTRTZTIxNm9QenU3TVlOa2VnUjNuc3dtTzJ3b01NeXBUSlZMZlF6MkwyUVFQTFVBPXM5Ni1jIiwiaXNzIjoiaHR0cHM6Ly9zZWN1cmV0b2tlbi5nb29nbGUuY29tL3VhLXdlYi1hYmI2ZiIsImF1ZCI6InVhLXdlYi1hYmI2ZiIsImF1dGhfdGltZSI6MTc4NTc2NTIyOCwidXNlcl9pZCI6ImxUbDJEcGFKdzZhdkQ3c3M4SFJZR04zU0tEczIiLCJzdWIiOiJsVGwyRHBhSnc2YXZEN3NzOEhSWUdOM1NLRHMyIiwiaWF0IjoxNzg1NzY1MjI4LCJleHAiOjE3ODU3Njg4MjgsImVtYWlsIjoicGFyZW50c3JldmVyeXRoaW5nQGhvdG1haWwuY29tIiwiZW1haWxfdmVyaWZpZWQiOnRydWUsImZpcmViYXNlIjp7ImlkZW50aXRpZXMiOnsiZ29vZ2xlLmNvbSI6WyIxMDMyOTY1NTUzMDA0NjcxNzU3NTQiXSwiZW1haWwiOlsicGFyZW50c3JldmVyeXRoaW5nQGhvdG1haWwuY29tIl19LCJzaWduX2luX3Byb3ZpZGVyIjoiZ29vZ2xlLmNvbSJ9fQ.Q5GOdTMt7vuN1jH-7lyX3wUYrNS3wrnfd8l6yVG7PIsvHvB4RvTdc8uznWcQRVWemAlEzC9laCNHz_K1cbWTKtxPdbgjjsut4QTJzvtF164qnWLdyqw6NjVDXYri77luPBj4gQzeFLPxvgJMXH0Ejo9i4pwwHNfxjDyVd4DBi864-iC2u-LvXXgVXGnc01L_ZnOCWsmK8uvFA_3I_ki0f-CsSC3LQr4DU-v7deIGnPmO1GtTyYmtNQY13aZIKF2Kj5h3XpUtU9kPI15E9mKEW-3SYdNMvAJWrfsduI-yJ__NF7bPjJAs49p3WzOs-zlOPaOlkpkXv3nbdu1ZHnsR8A
-// - refreshToken: AMf-vBx9ph7RDTyohKhxMEcb2Ffh8BfkpZVgSkpoRlm1uEp4DaWHKAiEz9mJBb5TqSJuQhBsZPE_xpowuP-pmRarwUq7mfnmOHLY0-CDkKzi-4xdiBE8GGa0SF0HRv4s7mmAd9wzobIGdSsfNAWRUsKenSpdIhDuO31ZrcFbzBoXffRV-4GajviedxU-iUHj89BVdPyQjY4p5XnMdjkefabRc1_n_DKJtVWhEuEw3q6p_QkgMI5OwwLDagb3WW-49Hf4i4Ej5kKrn1HL87LGDF-5PbkIoGXUKEU3q6mQtUsCgPMAvVf1FINjwBG9N1z4A-_cecNGGOfAxsWI9t03hZ4mIb2kwPNGUgq0lP8FB7GO6W166yKAHgXyMRg5QCu3hRK5ho99-92TivyomZ7ktS7DVdos0EMLc7PxX3KEUlXYRi6S8PhzS0bYeK12Zh2sMlmZTVXL_Rct
+// - token:        sets the current idToken directly
+// - refreshToken: enables automatic refresh going forward
 // - expiresIn:    seconds until `token` expires (defaults to 3600 if omitted)
 app.post("/token", (req, res) => {
   const { token, refreshToken: rt, expiresIn } = req.body;
