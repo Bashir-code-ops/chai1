@@ -111,12 +111,47 @@ async function callChaiApi(url, options) {
   return response;
 }
 
-// ── GET /feed ─────────────────────────────────────────────────────────────────
+// ── GET /feed — bot recommendations feed ──────────────────────────────────────
+// Mirrors chai-ai.com's own feed calls: GET /api/feed/bots?tag=<tag>
+// Pass ?tag=recommended (default) or any other tag chai-ai.com uses.
 app.get("/feed", async (req, res) => {
-  res.json({
-    error: "Feed not available via website API",
-    note: "Use /search instead to find bots",
-  });
+  try {
+    const tag = req.query.tag || "recommended";
+    const response = await callChaiApi(`${WEBSITE_API_BASE}/feed/bots?tag=${encodeURIComponent(tag)}`, {
+      method: "GET",
+      headers: { "Content-Type": "application/json" },
+    });
+
+    const text = await response.text();
+    try {
+      res.status(response.status).json(JSON.parse(text));
+    } catch {
+      res.status(response.status).send(text);
+    }
+  } catch (err) {
+    console.error("Feed error:", err.message);
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+// ── GET /feed/tags — available feed tags/categories ───────────────────────────
+app.get("/feed/tags", async (req, res) => {
+  try {
+    const response = await callChaiApi(`${WEBSITE_API_BASE}/feed/tags`, {
+      method: "GET",
+      headers: { "Content-Type": "application/json" },
+    });
+
+    const text = await response.text();
+    try {
+      res.status(response.status).json(JSON.parse(text));
+    } catch {
+      res.status(response.status).send(text);
+    }
+  } catch (err) {
+    console.error("Feed tags error:", err.message);
+    res.status(err.status || 500).json({ error: err.message });
+  }
 });
 
 // ── GET /search?q=xxx ─────────────────────────────────────────────────────────
