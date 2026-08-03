@@ -57,8 +57,16 @@ app.post("/chat", async (req, res) => {
     if (!conversationId) {
       return res.status(400).json({ error: "conversationId is required" });
     }
-    if (!authToken) {
-      return res.status(401).json({ error: "Auth token not set. Use POST /token to set it." });
+
+    // Accept token per-request (header takes priority), fall back to in-memory one.
+    // This avoids relying on in-memory state, which is unreliable on serverless
+    // platforms like Vercel (each invocation may hit a different instance).
+    const headerToken = req.headers["authorization"]?.replace(/^Bearer\s+/i, "");
+    const bodyToken = req.body.token;
+    const tokenToUse = headerToken || bodyToken || authToken;
+
+    if (!tokenToUse) {
+      return res.status(401).json({ error: "No auth token provided. Send Authorization: Bearer <token>, a token field in the body, or POST /token first." });
     }
 
     console.log("→ Sending message to conversation:", conversationId);
@@ -66,7 +74,7 @@ app.post("/chat", async (req, res) => {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Authorization": `Bearer ${authToken}`,
+        "Authorization": `Bearer ${tokenToUse}`,
       },
       body: JSON.stringify({
         content: message || "",
