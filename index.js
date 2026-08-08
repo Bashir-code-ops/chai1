@@ -17,18 +17,34 @@ const MOBILE_API_KEY      = process.env.MOBILE_FIREBASE_API_KEY || "";
 const MOBILE_UID          = process.env.MOBILE_CHAI_UID || "";
 const MOBILE_REFRESH_TOKEN = process.env.MOBILE_REFRESH_TOKEN || "";
 
-// ── Website credentials ─────────────────────────────────────────────────────
-const WEBSITE_API_KEY      = process.env.WEBSITE_FIREBASE_API_KEY || "";
-const WEBSITE_UID          = process.env.WEBSITE_CHAI_UID || "";
-const WEBSITE_REFRESH_TOKEN = process.env.WEBSITE_REFRESH_TOKEN || "";
+// ── Website credentials — MULTIPLE accounts for automatic fallback ──────────
+// Each website account has its own daily message cap (~4/day observed). When
+// one account gets rate-limited, /chat automatically tries the next one.
+//
+// Set WEBSITE_ACCOUNTS as a JSON array in Vercel, e.g.:
+// [{"uid":"o5YR55rHXBYiPTVt4Lx2rw9wu0q1","refreshToken":"AMf-vBz..."}, {"uid":"...","refreshToken":"..."}]
+//
+// All website accounts share the SAME Firebase project/API key (it's the same
+// chai-ai.com app, just different logged-in users), so one key covers all of them.
+const WEBSITE_API_KEY = process.env.WEBSITE_FIREBASE_API_KEY || "";
+let WEBSITE_ACCOUNTS = [];
+try {
+  WEBSITE_ACCOUNTS = JSON.parse(process.env.WEBSITE_ACCOUNTS || "[]");
+} catch (e) {
+  console.error("❌ Failed to parse WEBSITE_ACCOUNTS env var as JSON:", e.message);
+}
 
 const WEBSITE_API_BASE = "https://www.chai-ai.com/api";
 
 for (const [name, val] of Object.entries({
-  MOBILE_API_KEY, MOBILE_UID, MOBILE_REFRESH_TOKEN,
-  WEBSITE_API_KEY, WEBSITE_UID, WEBSITE_REFRESH_TOKEN,
+  MOBILE_API_KEY, MOBILE_UID, MOBILE_REFRESH_TOKEN, WEBSITE_API_KEY,
 })) {
   if (!val) console.warn(`⚠️  ${name} is not set`);
+}
+if (WEBSITE_ACCOUNTS.length === 0) {
+  console.warn("⚠️  WEBSITE_ACCOUNTS is empty or invalid — /chat will have no accounts to use");
+} else {
+  console.log(`ℹ️  Loaded ${WEBSITE_ACCOUNTS.length} website account(s) for /chat fallback`);
 }
 
 // ── Generic token-cache factory — one instance per credential set ────────────
@@ -69,8 +85,13 @@ function createTokenGetter(label, apiKey, refreshToken) {
   };
 }
 
-const getMobileToken  = createTokenGetter("MOBILE", MOBILE_API_KEY, MOBILE_REFRESH_TOKEN);
-const getWebsiteToken = createTokenGetter("WEBSITE", WEBSITE_API_KEY, WEBSITE_REFRESH_TOKEN);
+const getMobileToken = createTokenGetter("MOBILE", MOBILE_API_KEY, MOBILE_REFRESH_TOKEN);
+
+// One independent token cache PER website account, so we're not re-minting
+// tokens for an account we're not currently using.
+const websiteTokenGetters = WEBSITE_ACCOUNTS.map((acct, i) =>
+  createTokenGetter(`WEBSITE[${i}]:${acct.uid}`, WEBSITE_API_KEY, acct.refreshToken)
+);
 
 // ── GET /feed (mobile API) ──────────────────────────────────────────────────
 app.get("/feed", async (req, res) => {
@@ -178,38 +199,27 @@ app.get("/image", async (req, res) => {
   }
 });
 
-// ── POST /chat (WEBSITE API, website credentials — no regional block) ────────
+// ── POST /chat (WEBSITE API, rotates across multiple accounts on 429) ────────
 app.post("/chat", async (req, res) => {
   try {
     const { conversationId, message } = req.body;
     if (!conversationId) {
       return res.status(400).json({ error: "conversationId is required" });
     }
-
-    // The frontend may send a conversationId built with a DIFFERENT account's
-    // UID (e.g. the mobile account), since it doesn't know /chat now runs on
-    // the website account behind the scenes. Auto-correct the UID prefix so
-    // callers never need to worry about which account is actually used here.
-    // Conversation IDs look like: "<uid>__bot_<botId>_<timestamp>"
-    let safeConversationId = conversationId;
-    const botMarkerIndex = conversationId.indexOf("__bot_");
-    if (botMarkerIndex !== -1) {
-      const currentUid = conversationId.substring(0, botMarkerIndex);
-      if (currentUid !== WEBSITE_UID) {
-        safeConversationId = WEBSITE_UID + conversationId.substring(botMarkerIndex);
-        console.log(`↻ Rewrote conversationId UID: ${currentUid} → ${WEBSITE_UID}`);
-      }
+    if (WEBSITE_ACCOUNTS.length === 0) {
+      return res.status(500).json({ error: "No website accounts configured (WEBSITE_ACCOUNTS is empty)." });
     }
 
-    const token = await getWebsiteToken();
-
-    // Extracts the bot ID out of a conversationId shaped "<uid>__bot_<botId>_<timestamp>"
+    // Extracts "__bot_<botId>_<timestamp>" out of a conversationId
     function getBotSegment(convId) {
       const idx = convId.indexOf("__bot_");
-      return idx === -1 ? null : convId.substring(idx); // "__bot_<botId>_<timestamp>"
+      return idx === -1 ? null : convId.substring(idx);
     }
+    const botSegment = getBotSegment(conversationId);
 
-    async function sendMessage(convId) {
+    async function sendAs(accountIndex, convId) {
+      const account = WEBSITE_ACCOUNTS[accountIndex];
+      const token = await websiteTokenGetters[accountIndex]();
       const resp = await fetch(`${WEBSITE_API_BASE}/conversations/${convId}/send`, {
         method: "POST",
         headers: {
@@ -222,39 +232,51 @@ app.post("/chat", async (req, res) => {
       return { resp, bodyText };
     }
 
-    console.log("→ Sending to website API:", safeConversationId);
-    let { resp: response, bodyText: text } = await sendMessage(safeConversationId);
-
-    // If this specific conversation has hit its per-day limit, Chai's own
-    // behavior is that starting a NEW conversation with the same bot resets
-    // it. So on that specific error, mint a fresh conversationId (same bot,
-    // new timestamp) and retry once, transparently to the caller.
-    if (response.status === 429) {
-      let isMessageLimit = false;
+    function isMessageLimitError(bodyText) {
       try {
-        isMessageLimit = JSON.parse(text)?.detail?.error === "message_limit_reached";
-      } catch {}
-
-      const botSegment = getBotSegment(safeConversationId);
-      if (isMessageLimit && botSegment) {
-        const botIdOnly = botSegment.replace(/_\d+$/, ""); // strip trailing timestamp
-        const freshConversationId = `${WEBSITE_UID}${botIdOnly}_${Date.now()}`;
-        console.log(`↻ Hit per-conversation message limit, retrying with fresh conversation: ${freshConversationId}`);
-        ({ resp: response, bodyText: text } = await sendMessage(freshConversationId));
-        safeConversationId = freshConversationId;
+        return JSON.parse(bodyText)?.detail?.error === "message_limit_reached";
+      } catch {
+        return false;
       }
+    }
+
+    let response, text, usedAccountIndex, finalConversationId;
+
+    for (let i = 0; i < WEBSITE_ACCOUNTS.length; i++) {
+      const account = WEBSITE_ACCOUNTS[i];
+      // Rewrite the conversationId's UID to whichever account we're trying,
+      // reusing the same bot + timestamp so history stays consistent per account.
+      const convId = botSegment ? `${account.uid}${botSegment}` : conversationId;
+
+      console.log(`→ Trying website account [${i}] (${account.uid}) for conversation:`, convId);
+      const result = await sendAs(i, convId);
+      response = result.resp;
+      text = result.bodyText;
+
+      if (response.status !== 429 || !isMessageLimitError(text)) {
+        usedAccountIndex = i;
+        finalConversationId = convId;
+        break; // success, or a non-rate-limit failure — stop trying more accounts
+      }
+      console.log(`↻ Account [${i}] (${account.uid}) hit its daily limit, trying next account...`);
     }
 
     console.log("← Website API status:", response.status);
     console.log("← Website API body:", text.substring(0, 500));
 
+    if (response.status === 429) {
+      return res.status(429).json({
+        error: "all_accounts_rate_limited",
+        detail: `All ${WEBSITE_ACCOUNTS.length} configured account(s) have hit their daily message limit.`,
+      });
+    }
+
     try {
       const parsed = JSON.parse(text);
-      // Let the caller know if we silently switched to a new conversation,
-      // so the frontend can update its stored conversationId for next time.
-      if (safeConversationId !== conversationId) {
-        parsed._newConversationId = safeConversationId;
+      if (finalConversationId !== conversationId) {
+        parsed._newConversationId = finalConversationId;
       }
+      parsed._accountIndex = usedAccountIndex; // useful for debugging/logging
       res.status(response.status).json(parsed);
     } catch {
       res.status(response.status).send(text);
@@ -275,10 +297,14 @@ app.get("/token/mobile", async (req, res) => {
   }
 });
 
-app.get("/token/website", async (req, res) => {
+app.get("/token/website/:index", async (req, res) => {
   try {
-    const token = await getWebsiteToken();
-    res.json({ token, uid: WEBSITE_UID });
+    const i = parseInt(req.params.index, 10);
+    if (!WEBSITE_ACCOUNTS[i]) {
+      return res.status(404).json({ error: `No website account at index ${i}. Have ${WEBSITE_ACCOUNTS.length} account(s).` });
+    }
+    const token = await websiteTokenGetters[i]();
+    res.json({ token, uid: WEBSITE_ACCOUNTS[i].uid });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -286,11 +312,11 @@ app.get("/token/website", async (req, res) => {
 
 // ── Health check ────────────────────────────────────────────────────────────
 app.get("/", (req, res) => res.json({
-  status: "Chai Proxy running (true hybrid: separate mobile + website credentials)",
-  note: "Feed/search/botinfo use MOBILE credentials. Chat uses WEBSITE credentials.",
+  status: "Chai Proxy running (true hybrid, multi-account chat fallback)",
+  note: "Feed/search/botinfo use MOBILE credentials. Chat rotates across WEBSITE_ACCOUNTS on daily rate limit.",
   configured: {
     mobile: { api_key: !!MOBILE_API_KEY, uid: !!MOBILE_UID, refresh_token: !!MOBILE_REFRESH_TOKEN },
-    website: { api_key: !!WEBSITE_API_KEY, uid: !!WEBSITE_UID, refresh_token: !!WEBSITE_REFRESH_TOKEN },
+    website: { api_key: !!WEBSITE_API_KEY, accounts: WEBSITE_ACCOUNTS.length, uids: WEBSITE_ACCOUNTS.map(a => a.uid) },
   },
 }));
 
