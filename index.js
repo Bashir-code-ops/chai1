@@ -4,92 +4,218 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ── Credentials ──────────────────────────────────────────────────────────────
-const FIREBASE_API_KEY = "AIzaSyDlCazdn_bziqDVwQkDroR8eK4GVaEHawU";
-const CHAI_UID         = "5UjcH6R0zWYwzLciAX7lz9F3Sz02";
-const REFRESH_TOKEN    = "AMf-vBxABjgCQ0SoRCymcdUbckokYPr9aPJ7-zsy6cFeXMioykMeSSGJiF4Vpi1tqic6HqzfaTmNWDPAo1Z-WBAEFGAuY_tGRt_fyujgs4zhwj7FnvFIp-ZKWM4RsX8sO5qwVZ6gRVFn5eo8kehreZbOCblhhqMMqgaR-EgI_whH4uVWONzzR_QqZnOfWA_yRrEuxAQy4YwoA6znvXbLNz-v21MJbhrzLQiZ6Vc--XuUWqD9Z09f5W2KLfU-8Zq96LPygwE2LS-BLQCqrLCxFzQEVOLRH_422e68fhEbmwv3cvJitPo3LoPas1VO4XCAvULjjT0HC6SjbG6ko03H1VW-NOCCbOTpmlXfrvIUVO-g0bcCsCYLZIL0WMgz5V9PvJ1LYPz4QKBv";
-const BOT_RESPONDER    = "https://bot-responder-eu-shdxwd54ta-nw.a.run.app";
+// ── TRUE Hybrid: two SEPARATE Firebase projects/accounts ─────────────────────
+// The mobile app and the website are different Firebase projects, even for the
+// same Chai account — a token minted in one project is NOT valid in the other.
+// So we keep two fully independent credential sets and token caches.
+//
+//   MOBILE credentials → feed / search / botinfo / image (unrestricted)
+//   WEBSITE credentials → chat only (avoids bot-responder's regional block)
 
-// ── Token cache ───────────────────────────────────────────────────────────────
-let cachedToken = null;
-let tokenExpiry = 0;
+// ── Mobile credentials ─────────────────────────────────────────────────────
+const MOBILE_API_KEY      = process.env.MOBILE_FIREBASE_API_KEY || "";
+const MOBILE_UID          = process.env.MOBILE_CHAI_UID || "";
+const MOBILE_REFRESH_TOKEN = process.env.MOBILE_REFRESH_TOKEN || "";
 
-async function getFreshToken() {
-  if (cachedToken && Date.now() < tokenExpiry) return cachedToken;
-  const res = await fetch(
-    `https://securetoken.googleapis.com/v1/token?key=${FIREBASE_API_KEY}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ grant_type: "refresh_token", refresh_token: REFRESH_TOKEN }),
-    }
-  );
-  const data = await res.json();
-  if (!data.id_token) throw new Error("Token refresh failed: " + JSON.stringify(data));
-  cachedToken = data.id_token;
-  tokenExpiry = Date.now() + 3500 * 1000;
-  console.log("✅ Token refreshed");
-  return cachedToken;
+// ── Website credentials ─────────────────────────────────────────────────────
+const WEBSITE_API_KEY      = process.env.WEBSITE_FIREBASE_API_KEY || "";
+const WEBSITE_UID          = process.env.WEBSITE_CHAI_UID || "";
+const WEBSITE_REFRESH_TOKEN = process.env.WEBSITE_REFRESH_TOKEN || "";
+
+const WEBSITE_API_BASE = "https://www.chai-ai.com/api";
+
+for (const [name, val] of Object.entries({
+  MOBILE_API_KEY, MOBILE_UID, MOBILE_REFRESH_TOKEN,
+  WEBSITE_API_KEY, WEBSITE_UID, WEBSITE_REFRESH_TOKEN,
+})) {
+  if (!val) console.warn(`⚠️  ${name} is not set`);
 }
 
-// ── GET /feed ─────────────────────────────────────────────────────────────────
+// ── Generic token-cache factory — one instance per credential set ────────────
+function createTokenGetter(label, apiKey, refreshToken) {
+  let cachedToken = null;
+  let tokenExpiry = 0;
+
+  return async function getFreshToken() {
+    if (cachedToken && Date.now() < tokenExpiry) return cachedToken;
+    if (!apiKey || !refreshToken) {
+      throw new Error(`${label}: API key / refresh token not configured on the proxy.`);
+    }
+
+    console.log(`🔄 Refreshing ${label} token...`);
+    try {
+      const res = await fetch(
+        `https://securetoken.googleapis.com/v1/token?key=${apiKey}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ grant_type: "refresh_token", refresh_token: refreshToken }),
+        }
+      );
+      const data = await res.json();
+      console.log(`🔄 ${label} token refresh response:`, JSON.stringify(data));
+      if (!data.id_token) {
+        throw new Error(`${label} token refresh failed: ` + JSON.stringify(data));
+      }
+
+      cachedToken = data.id_token;
+      tokenExpiry = Date.now() + 3500 * 1000; // 58 minutes
+      console.log(`✅ ${label} Firebase token refreshed`);
+      return cachedToken;
+    } catch (error) {
+      console.error(`❌ ${label} token refresh error:`, error.message, error.stack);
+      throw error;
+    }
+  };
+}
+
+const getMobileToken  = createTokenGetter("MOBILE", MOBILE_API_KEY, MOBILE_REFRESH_TOKEN);
+const getWebsiteToken = createTokenGetter("WEBSITE", WEBSITE_API_KEY, WEBSITE_REFRESH_TOKEN);
+
+// ── GET /feed (mobile API) ──────────────────────────────────────────────────
 app.get("/feed", async (req, res) => {
   try {
-    const token = await getFreshToken();
+    const token = await getMobileToken();
     const response = await fetch(
       "https://chai-feed-service-65663778556.us-central1.run.app/feeds/strict-or-lax-acquisition-resolved-feed",
       { headers: { Authorization: `Bearer ${token}` } }
     );
-    const data = await response.json();
-    res.status(response.status).json(data);
+    const text = await response.text();
+    console.log(`[/feed] upstream status: ${response.status}`);
+    if (!response.ok) {
+      console.error(`[/feed] upstream body: ${text.substring(0, 500)}`);
+      return res.status(response.status).json({
+        error: `Upstream feed service failed with status ${response.status}`,
+        upstreamBody: text.substring(0, 500),
+      });
+    }
+    try {
+      res.status(response.status).json(JSON.parse(text));
+    } catch {
+      res.status(502).json({ error: "Upstream feed service returned non-JSON response", upstreamBody: text.substring(0, 500) });
+    }
   } catch (err) {
+    console.error("[/feed] error:", err.message);
     res.status(500).json({ error: err.message });
   }
 });
 
-// ── GET /search?q=xxx ─────────────────────────────────────────────────────────
+// ── GET /search (mobile API) ────────────────────────────────────────────────
 app.get("/search", async (req, res) => {
   try {
-    const token = await getFreshToken();
+    const token = await getMobileToken();
     const query = req.query.q || "";
     const response = await fetch(
       `https://bot-service-us1-65663778556.us-central1.run.app/v2/search?text=${encodeURIComponent(query)}&limit=20&offset=${req.query.offset || 0}`,
       { headers: { Authorization: `Bearer ${token}` } }
     );
-    const data = await response.json();
-    res.status(response.status).json(data);
+    const text = await response.text();
+    console.log(`[/search] q="${query}" upstream status: ${response.status}`);
+    if (!response.ok) {
+      console.error(`[/search] upstream body: ${text.substring(0, 500)}`);
+      return res.status(response.status).json({
+        error: `Upstream search service failed with status ${response.status}`,
+        upstreamBody: text.substring(0, 500),
+      });
+    }
+    try {
+      res.status(response.status).json(JSON.parse(text));
+    } catch {
+      res.status(502).json({ error: "Upstream search service returned non-JSON response", upstreamBody: text.substring(0, 500) });
+    }
   } catch (err) {
+    console.error("[/search] error:", err.message);
     res.status(500).json({ error: err.message });
   }
 });
 
-// ── POST /chat ────────────────────────────────────────────────────────────────
+// ── GET /botinfo/:botId (mobile API) ──────────────────────────────────────────
+app.get("/botinfo/:botId", async (req, res) => {
+  try {
+    const token = await getMobileToken();
+    const response = await fetch(
+      `https://bot-service-us1-65663778556.us-central1.run.app/v2/chatbots/${req.params.botId}`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    const text = await response.text();
+    console.log(`[/botinfo] botId=${req.params.botId} upstream status: ${response.status}`);
+    if (!response.ok) {
+      return res.status(response.status).json({ error: `Upstream bot service failed with status ${response.status}`, upstreamBody: text.substring(0, 500) });
+    }
+    try {
+      res.status(response.status).json(JSON.parse(text));
+    } catch {
+      res.status(502).json({ error: "Upstream bot service returned non-JSON response" });
+    }
+  } catch (err) {
+    console.error("[/botinfo] error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /image (proxy bot images — no auth needed) ────────────────────────────
+app.get("/image", async (req, res) => {
+  try {
+    const imageUrl = decodeURIComponent(req.query.url);
+    const response = await fetch(imageUrl, { redirect: "follow" });
+    console.log(`[/image] fetching: ${imageUrl}, status: ${response.status}`);
+    if (!response.ok) {
+      return res.status(response.status).json({ error: `Upstream image fetch failed with status ${response.status}` });
+    }
+    const contentType = response.headers.get("content-type") || "";
+    const definitelyNotImage = /^(text\/|application\/json|application\/xml)/i.test(contentType);
+    if (definitelyNotImage) {
+      return res.status(502).json({ error: `Upstream did not return an image (content-type: ${contentType})` });
+    }
+    const buffer = await response.arrayBuffer();
+    const outgoingContentType = contentType.startsWith("image/") ? contentType : "image/jpeg";
+    res.setHeader("Content-Type", outgoingContentType);
+    res.setHeader("Cache-Control", "public, max-age=86400");
+    res.send(Buffer.from(buffer));
+  } catch (err) {
+    console.error("[/image] error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /chat (WEBSITE API, website credentials — no regional block) ────────
 app.post("/chat", async (req, res) => {
   try {
-    const { botId, message, conversationId } = req.body;
-    if (!botId || !message) {
-      return res.status(400).json({ error: "botId and message are required" });
+    const { conversationId, message } = req.body;
+    if (!conversationId) {
+      return res.status(400).json({ error: "conversationId is required" });
     }
-    const token = await getFreshToken();
-    const payload = {
-      user_uid:        CHAI_UID,
-      bot_uid:         botId,
-      conversation_id: conversationId || `${CHAI_UID}_${botId}`,
-      text:            message,
-      model:           "chai_v2",
-    };
-    console.log("→ Sending to bot-responder:", JSON.stringify(payload));
-    const response = await fetch(`${BOT_RESPONDER}/send_message`, {
+
+    // The frontend may send a conversationId built with a DIFFERENT account's
+    // UID (e.g. the mobile account), since it doesn't know /chat now runs on
+    // the website account behind the scenes. Auto-correct the UID prefix so
+    // callers never need to worry about which account is actually used here.
+    // Conversation IDs look like: "<uid>__bot_<botId>_<timestamp>"
+    let safeConversationId = conversationId;
+    const botMarkerIndex = conversationId.indexOf("__bot_");
+    if (botMarkerIndex !== -1) {
+      const currentUid = conversationId.substring(0, botMarkerIndex);
+      if (currentUid !== WEBSITE_UID) {
+        safeConversationId = WEBSITE_UID + conversationId.substring(botMarkerIndex);
+        console.log(`↻ Rewrote conversationId UID: ${currentUid} → ${WEBSITE_UID}`);
+      }
+    }
+
+    const token = await getWebsiteToken();
+    console.log("→ Sending to website API:", safeConversationId);
+    const response = await fetch(`${WEBSITE_API_BASE}/conversations/${safeConversationId}/send`, {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${token}`,
-        "Content-Type":  "application/json",
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
       },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ content: message || "" }),
     });
+
     const text = await response.text();
-    console.log("← Bot-responder status:", response.status);
-    console.log("← Bot-responder body:", text.substring(0, 500));
+    console.log("← Website API status:", response.status);
+    console.log("← Website API body:", text.substring(0, 500));
+
     try {
       res.status(response.status).json(JSON.parse(text));
     } catch {
@@ -101,76 +227,34 @@ app.post("/chat", async (req, res) => {
   }
 });
 
-// ── GET /token ────────────────────────────────────────────────────────────────
-app.get("/token", async (req, res) => {
+// ── GET /token/mobile and /token/website — debug helpers ─────────────────────
+app.get("/token/mobile", async (req, res) => {
   try {
-    const token = await getFreshToken();
-    res.json({ token, uid: CHAI_UID });
+    const token = await getMobileToken();
+    res.json({ token, uid: MOBILE_UID });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// ── GET /image?url=... ────────────────────────────────────────────────────────
-app.get("/image", async (req, res) => {
+app.get("/token/website", async (req, res) => {
   try {
-    const imageUrl = decodeURIComponent(req.query.url);
-    const response = await fetch(imageUrl, { redirect: "follow" });
-
-    console.log(`[/image] fetching: ${imageUrl}`);
-    console.log(`[/image] upstream status: ${response.status}, content-type: ${response.headers.get("content-type")}`);
-
-    if (!response.ok) {
-      console.error(`[/image] upstream failed with status ${response.status} for ${imageUrl}`);
-      return res.status(response.status).json({
-        error: `Upstream image fetch failed with status ${response.status}`,
-        url: imageUrl,
-      });
-    }
-
-    const contentType = response.headers.get("content-type") || "";
-    // Chai's own CDN (images.chai.ml) sometimes sends "application/octet-stream"
-    // for genuinely valid images, so we can't strictly require an "image/" prefix.
-    // Only reject content-types that are clearly NOT image data (html error pages, json, text).
-    const definitelyNotImage = /^(text\/|application\/json|application\/xml)/i.test(contentType);
-    if (definitelyNotImage) {
-      console.error(`[/image] rejected non-image content-type "${contentType}" for ${imageUrl}`);
-      return res.status(502).json({
-        error: `Upstream did not return an image (content-type: ${contentType})`,
-        url: imageUrl,
-      });
-    }
-
-    const buffer = await response.arrayBuffer();
-    // If upstream sent a generic/octet-stream type, force a sane image content-type
-    // so the browser actually renders it instead of treating it as a download/blob.
-    const outgoingContentType = contentType.startsWith("image/") ? contentType : "image/jpeg";
-    res.setHeader("Content-Type", outgoingContentType);
-    res.setHeader("Cache-Control", "public, max-age=86400");
-    res.send(Buffer.from(buffer));
-  } catch (err) {
-    console.error("[/image] error:", err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ── GET /user/:userId — get creator profile ───────────────────────────────────
-app.get("/user/:userId", async (req, res) => {
-  try {
-    const token = await getFreshToken();
-    const response = await fetch(
-      `https://chai-user-service-65663778556.us-central1.run.app/users/${req.params.userId}`,
-      { headers: { Authorization: `Bearer ${token}` } }
-    );
-    const data = await response.json();
-    res.status(response.status).json(data);
+    const token = await getWebsiteToken();
+    res.json({ token, uid: WEBSITE_UID });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// ── Health check ──────────────────────────────────────────────────────────────
-app.get("/", (req, res) => res.json({ status: "Chai Proxy running (mobile API)" }));
+// ── Health check ────────────────────────────────────────────────────────────
+app.get("/", (req, res) => res.json({
+  status: "Chai Proxy running (true hybrid: separate mobile + website credentials)",
+  note: "Feed/search/botinfo use MOBILE credentials. Chat uses WEBSITE credentials.",
+  configured: {
+    mobile: { api_key: !!MOBILE_API_KEY, uid: !!MOBILE_UID, refresh_token: !!MOBILE_REFRESH_TOKEN },
+    website: { api_key: !!WEBSITE_API_KEY, uid: !!WEBSITE_UID, refresh_token: !!WEBSITE_REFRESH_TOKEN },
+  },
+}));
 
 if (require.main === module) {
   app.listen(3001, () => console.log("Chai Proxy running on http://localhost:3001"));
