@@ -210,12 +210,33 @@ app.post("/chat", async (req, res) => {
       return res.status(500).json({ error: "No website accounts configured (WEBSITE_ACCOUNTS is empty)." });
     }
 
-    // Extracts "__bot_<botId>_<timestamp>" out of a conversationId
-    function getBotSegment(convId) {
-      const idx = convId.indexOf("__bot_");
-      return idx === -1 ? null : convId.substring(idx);
+// Remembers which conversationId each (account, bot) pair is actually using,
+// since each account gets its own timestamp when a conversation is created —
+// reusing one account's timestamp for another account 500s (conversation
+// doesn't exist for them). Best-effort, in-memory only (resets on cold start,
+// but that's fine — a fresh conversationId gets created again automatically).
+const accountBotConversations = new Map(); // key: "accountIndex:botId" -> conversationId
+
+// ── POST /chat (WEBSITE API, rotates across multiple accounts on 429) ────────
+app.post("/chat", async (req, res) => {
+  try {
+    const { conversationId, message } = req.body;
+    if (!conversationId) {
+      return res.status(400).json({ error: "conversationId is required" });
     }
-    const botSegment = getBotSegment(conversationId);
+    if (WEBSITE_ACCOUNTS.length === 0) {
+      return res.status(500).json({ error: "No website accounts configured (WEBSITE_ACCOUNTS is empty)." });
+    }
+
+    // Extracts just the botId out of "<uid>__bot_<botId>_<timestamp>"
+    function getBotId(convId) {
+      const idx = convId.indexOf("__bot_");
+      if (idx === -1) return null;
+      const rest = convId.substring(idx + "__bot_".length); // "<botId>_<timestamp>"
+      return rest.replace(/_\d+$/, "");
+    }
+    const botId = getBotId(conversationId);
+    const originalUid = botId ? conversationId.substring(0, conversationId.indexOf("__bot_")) : null;
 
     async function sendAs(accountIndex, convId) {
       const account = WEBSITE_ACCOUNTS[accountIndex];
@@ -244,9 +265,24 @@ app.post("/chat", async (req, res) => {
 
     for (let i = 0; i < WEBSITE_ACCOUNTS.length; i++) {
       const account = WEBSITE_ACCOUNTS[i];
-      // Rewrite the conversationId's UID to whichever account we're trying,
-      // reusing the same bot + timestamp so history stays consistent per account.
-      const convId = botSegment ? `${account.uid}${botSegment}` : conversationId;
+      let convId;
+
+      if (!botId) {
+        // Couldn't parse the format at all — just pass through as-is.
+        convId = conversationId;
+      } else if (account.uid === originalUid) {
+        // This IS the account the conversationId was originally built for —
+        // use it exactly as given.
+        convId = conversationId;
+      } else {
+        // Different account: reuse a previously-established conversationId
+        // for this (account, bot) pair if we have one, otherwise mint a
+        // brand new one (new timestamp) — this account has never talked to
+        // this bot under this ID before, so a borrowed timestamp won't exist.
+        const cacheKey = `${i}:${botId}`;
+        convId = accountBotConversations.get(cacheKey) || `${account.uid}__bot_${botId}_${Date.now()}`;
+        accountBotConversations.set(cacheKey, convId);
+      }
 
       console.log(`→ Trying website account [${i}] (${account.uid}) for conversation:`, convId);
       const result = await sendAs(i, convId);
