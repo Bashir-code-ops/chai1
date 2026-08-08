@@ -5,10 +5,19 @@ app.use(cors());
 app.use(express.json());
 
 // ── TRUE Hybrid: two SEPARATE Firebase projects/accounts ─────────────────────
+// The mobile app and the website are different Firebase projects, even for the
+// same Chai account — a token minted in one project is NOT valid in the other.
+// So we keep two fully independent credential sets and token caches.
+//
+//   MOBILE credentials → feed / search / botinfo / image (unrestricted)
+//   WEBSITE credentials → chat only (avoids bot-responder's regional block)
+
+// ── Mobile credentials ─────────────────────────────────────────────────────
 const MOBILE_API_KEY      = process.env.MOBILE_FIREBASE_API_KEY || "";
 const MOBILE_UID          = process.env.MOBILE_CHAI_UID || "";
 const MOBILE_REFRESH_TOKEN = process.env.MOBILE_REFRESH_TOKEN || "";
 
+// ── Website credentials ─────────────────────────────────────────────────────
 const WEBSITE_API_KEY      = process.env.WEBSITE_FIREBASE_API_KEY || "";
 const WEBSITE_UID          = process.env.WEBSITE_CHAI_UID || "";
 const WEBSITE_REFRESH_TOKEN = process.env.WEBSITE_REFRESH_TOKEN || "";
@@ -22,6 +31,7 @@ for (const [name, val] of Object.entries({
   if (!val) console.warn(`⚠️  ${name} is not set`);
 }
 
+// ── Generic token-cache factory — one instance per credential set ────────────
 function createTokenGetter(label, apiKey, refreshToken) {
   let cachedToken = null;
   let tokenExpiry = 0;
@@ -47,7 +57,7 @@ function createTokenGetter(label, apiKey, refreshToken) {
     }
 
     cachedToken = data.id_token;
-    tokenExpiry = Date.now() + 3500 * 1000;
+    tokenExpiry = Date.now() + 3500 * 1000; // 58 minutes
     console.log(`✅ ${label} Firebase token refreshed`);
     return cachedToken;
   };
@@ -56,6 +66,7 @@ function createTokenGetter(label, apiKey, refreshToken) {
 const getMobileToken  = createTokenGetter("MOBILE", MOBILE_API_KEY, MOBILE_REFRESH_TOKEN);
 const getWebsiteToken = createTokenGetter("WEBSITE", WEBSITE_API_KEY, WEBSITE_REFRESH_TOKEN);
 
+// ── GET /feed (mobile API) ──────────────────────────────────────────────────
 app.get("/feed", async (req, res) => {
   try {
     const token = await getMobileToken();
@@ -83,6 +94,7 @@ app.get("/feed", async (req, res) => {
   }
 });
 
+// ── GET /search (mobile API) ────────────────────────────────────────────────
 app.get("/search", async (req, res) => {
   try {
     const token = await getMobileToken();
@@ -111,6 +123,7 @@ app.get("/search", async (req, res) => {
   }
 });
 
+// ── GET /botinfo/:botId (mobile API) ──────────────────────────────────────────
 app.get("/botinfo/:botId", async (req, res) => {
   try {
     const token = await getMobileToken();
@@ -134,6 +147,7 @@ app.get("/botinfo/:botId", async (req, res) => {
   }
 });
 
+// ── GET /image (proxy bot images — no auth needed) ────────────────────────────
 app.get("/image", async (req, res) => {
   try {
     const imageUrl = decodeURIComponent(req.query.url);
@@ -158,6 +172,7 @@ app.get("/image", async (req, res) => {
   }
 });
 
+// ── POST /chat (WEBSITE API, website credentials — no regional block) ────────
 app.post("/chat", async (req, res) => {
   try {
     const { conversationId, message } = req.body;
@@ -165,9 +180,24 @@ app.post("/chat", async (req, res) => {
       return res.status(400).json({ error: "conversationId is required" });
     }
 
+    // The frontend may send a conversationId built with a DIFFERENT account's
+    // UID (e.g. the mobile account), since it doesn't know /chat now runs on
+    // the website account behind the scenes. Auto-correct the UID prefix so
+    // callers never need to worry about which account is actually used here.
+    // Conversation IDs look like: "<uid>__bot_<botId>_<timestamp>"
+    let safeConversationId = conversationId;
+    const botMarkerIndex = conversationId.indexOf("__bot_");
+    if (botMarkerIndex !== -1) {
+      const currentUid = conversationId.substring(0, botMarkerIndex);
+      if (currentUid !== WEBSITE_UID) {
+        safeConversationId = WEBSITE_UID + conversationId.substring(botMarkerIndex);
+        console.log(`↻ Rewrote conversationId UID: ${currentUid} → ${WEBSITE_UID}`);
+      }
+    }
+
     const token = await getWebsiteToken();
-    console.log("→ Sending to website API:", conversationId);
-    const response = await fetch(`${WEBSITE_API_BASE}/conversations/${conversationId}/send`, {
+    console.log("→ Sending to website API:", safeConversationId);
+    const response = await fetch(`${WEBSITE_API_BASE}/conversations/${safeConversationId}/send`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -191,6 +221,7 @@ app.post("/chat", async (req, res) => {
   }
 });
 
+// ── GET /token/mobile and /token/website — debug helpers ─────────────────────
 app.get("/token/mobile", async (req, res) => {
   try {
     const token = await getMobileToken();
@@ -209,6 +240,7 @@ app.get("/token/website", async (req, res) => {
   }
 });
 
+// ── Health check ────────────────────────────────────────────────────────────
 app.get("/", (req, res) => res.json({
   status: "Chai Proxy running (true hybrid: separate mobile + website credentials)",
   note: "Feed/search/botinfo use MOBILE credentials. Chat uses WEBSITE credentials.",
