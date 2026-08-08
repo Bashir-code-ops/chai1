@@ -202,22 +202,60 @@ app.post("/chat", async (req, res) => {
     }
 
     const token = await getWebsiteToken();
-    console.log("→ Sending to website API:", safeConversationId);
-    const response = await fetch(`${WEBSITE_API_BASE}/conversations/${safeConversationId}/send`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({ content: message || "" }),
-    });
 
-    const text = await response.text();
+    // Extracts the bot ID out of a conversationId shaped "<uid>__bot_<botId>_<timestamp>"
+    function getBotSegment(convId) {
+      const idx = convId.indexOf("__bot_");
+      return idx === -1 ? null : convId.substring(idx); // "__bot_<botId>_<timestamp>"
+    }
+
+    async function sendMessage(convId) {
+      const resp = await fetch(`${WEBSITE_API_BASE}/conversations/${convId}/send`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ content: message || "" }),
+      });
+      const bodyText = await resp.text();
+      return { resp, bodyText };
+    }
+
+    console.log("→ Sending to website API:", safeConversationId);
+    let { resp: response, bodyText: text } = await sendMessage(safeConversationId);
+
+    // If this specific conversation has hit its per-day limit, Chai's own
+    // behavior is that starting a NEW conversation with the same bot resets
+    // it. So on that specific error, mint a fresh conversationId (same bot,
+    // new timestamp) and retry once, transparently to the caller.
+    if (response.status === 429) {
+      let isMessageLimit = false;
+      try {
+        isMessageLimit = JSON.parse(text)?.detail?.error === "message_limit_reached";
+      } catch {}
+
+      const botSegment = getBotSegment(safeConversationId);
+      if (isMessageLimit && botSegment) {
+        const botIdOnly = botSegment.replace(/_\d+$/, ""); // strip trailing timestamp
+        const freshConversationId = `${WEBSITE_UID}${botIdOnly}_${Date.now()}`;
+        console.log(`↻ Hit per-conversation message limit, retrying with fresh conversation: ${freshConversationId}`);
+        ({ resp: response, bodyText: text } = await sendMessage(freshConversationId));
+        safeConversationId = freshConversationId;
+      }
+    }
+
     console.log("← Website API status:", response.status);
     console.log("← Website API body:", text.substring(0, 500));
 
     try {
-      res.status(response.status).json(JSON.parse(text));
+      const parsed = JSON.parse(text);
+      // Let the caller know if we silently switched to a new conversation,
+      // so the frontend can update its stored conversationId for next time.
+      if (safeConversationId !== conversationId) {
+        parsed._newConversationId = safeConversationId;
+      }
+      res.status(response.status).json(parsed);
     } catch {
       res.status(response.status).send(text);
     }
