@@ -199,17 +199,6 @@ app.get("/image", async (req, res) => {
   }
 });
 
-// ── POST /chat (WEBSITE API, rotates across multiple accounts on 429) ────────
-app.post("/chat", async (req, res) => {
-  try {
-    const { conversationId, message } = req.body;
-    if (!conversationId) {
-      return res.status(400).json({ error: "conversationId is required" });
-    }
-    if (WEBSITE_ACCOUNTS.length === 0) {
-      return res.status(500).json({ error: "No website accounts configured (WEBSITE_ACCOUNTS is empty)." });
-    }
-
 // Remembers which conversationId each (account, bot) pair is actually using,
 // since each account gets its own timestamp when a conversation is created —
 // reusing one account's timestamp for another account 500s (conversation
