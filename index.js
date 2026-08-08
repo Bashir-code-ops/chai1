@@ -1,49 +1,83 @@
 const express = require("express");
 const cors = require("cors");
 const app = express();
+const crypto = require("crypto");
 app.use(cors());
 app.use(express.json());
 
-// ── TRUE Hybrid: two SEPARATE Firebase projects/accounts ─────────────────────
-// The mobile app and the website are different Firebase projects, even for the
-// same Chai account — a token minted in one project is NOT valid in the other.
-// So we keep two fully independent credential sets and token caches.
-//
-//   MOBILE credentials → feed / search / botinfo / image (unrestricted)
-//   WEBSITE credentials → chat only (avoids bot-responder's regional block)
+// ================== BYPASS CONFIGURATION ==================
+// Pool of multiple Firebase accounts (mobile + website)
+const MOBILE_CREDENTIALS = [
+  { apiKey: process.env.MOBILE_KEY_1 || "", uid: process.env.MOBILE_UID_1 || "", refreshToken: process.env.MOBILE_REFRESH_1 || "" },
+  { apiKey: process.env.MOBILE_KEY_2 || "", uid: process.env.MOBILE_UID_2 || "", refreshToken: process.env.MOBILE_REFRESH_2 || "" },
+  { apiKey: process.env.MOBILE_KEY_3 || "", uid: process.env.MOBILE_UID_3 || "", refreshToken: process.env.MOBILE_REFRESH_3 || "" },
+];
 
-// ── Mobile credentials ─────────────────────────────────────────────────────
-const MOBILE_API_KEY      = process.env.MOBILE_FIREBASE_API_KEY || "";
-const MOBILE_UID          = process.env.MOBILE_CHAI_UID || "";
-const MOBILE_REFRESH_TOKEN = process.env.MOBILE_REFRESH_TOKEN || "";
+const WEBSITE_CREDENTIALS = [
+  { apiKey: process.env.WEBSITE_KEY_1 || "", uid: process.env.WEBSITE_UID_1 || "", refreshToken: process.env.WEBSITE_REFRESH_1 || "" },
+  { apiKey: process.env.WEBSITE_KEY_2 || "", uid: process.env.WEBSITE_UID_2 || "", refreshToken: process.env.WEBSITE_REFRESH_2 || "" },
+  { apiKey: process.env.WEBSITE_KEY_3 || "", uid: process.env.WEBSITE_UID_3 || "", refreshToken: process.env.WEBSITE_REFRESH_3 || "" },
+];
 
-// ── Website credentials ─────────────────────────────────────────────────────
-const WEBSITE_API_KEY      = process.env.WEBSITE_FIREBASE_API_KEY || "";
-const WEBSITE_UID          = process.env.WEBSITE_CHAI_UID || "";
-const WEBSITE_REFRESH_TOKEN = process.env.WEBSITE_REFRESH_TOKEN || "";
+// Proxy rotation pool (residential/mobile IPs)
+const PROXY_LIST = process.env.PROXY_LIST ? process.env.PROXY_LIST.split(",") : [];
+const USE_PROXY_ROTATION = PROXY_LIST.length > 0;
 
-const WEBSITE_API_BASE = "https://www.chai-ai.com/api";
+// ================== UTILITY FUNCTIONS ==================
+// Random delays to mimic human behavior
+const randomDelay = (min=100, max=3000) => new Promise(resolve => setTimeout(resolve, Math.floor(Math.random() * (max - min)) + min));
 
-for (const [name, val] of Object.entries({
-  MOBILE_API_KEY, MOBILE_UID, MOBILE_REFRESH_TOKEN,
-  WEBSITE_API_KEY, WEBSITE_UID, WEBSITE_REFRESH_TOKEN,
-})) {
-  if (!val) console.warn(`⚠️  ${name} is not set`);
+// Generate random request fingerprints
+function generateFingerprint() {
+  const devices = [
+    'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
+    'Mozilla/5.0 (Linux; Android 13; SM-S901U) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+  ];
+  const languages = ['en-US,en;q=0.9', 'es-ES,es;q=0.8', 'fr-FR,fr;q=0.7', 'de-DE,de;q=0.6'];
+  return {
+    'User-Agent': devices[Math.floor(Math.random() * devices.length)],
+    'Accept-Language': languages[Math.floor(Math.random() * languages.length)],
+    'X-Client-Version': `chai-mobile/${Math.floor(Math.random() * 500) + 100}`,
+    'X-Forwarded-For': `${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}`
+  };
 }
 
-// ── Generic token-cache factory — one instance per credential set ────────────
-function createTokenGetter(label, apiKey, refreshToken) {
-  let cachedToken = null;
-  let tokenExpiry = 0;
+// Rotating fetch with proxy support
+async function rotatingFetch(url, options = {}) {
+  await randomDelay(200, 1500); // Artificial delay
+  
+  const headers = { ...options.headers, ...generateFingerprint() };
+  
+  // Proxy rotation logic
+  if (USE_PROXY_ROTATION && Math.random() > 0.7) { // 30% chance to use proxy
+    const proxy = PROXY_LIST[Math.floor(Math.random() * PROXY_LIST.length)];
+    const [proxyHost, proxyPort] = proxy.split(':');
+    const HttpsProxyAgent = require('https-proxy-agent');
+    options.agent = new HttpsProxyAgent(`http://${proxyHost}:${proxyPort}`);
+    console.log(`↻ Using proxy: ${proxyHost}:${proxyPort}`);
+  }
+  
+  return fetch(url, { ...options, headers });
+}
 
-  return async function getFreshToken() {
-    if (cachedToken && Date.now() < tokenExpiry) return cachedToken;
-    if (!apiKey || !refreshToken) {
-      throw new Error(`${label}: API key / refresh token not configured on the proxy.`);
-    }
+// ================== TOKEN MANAGEMENT ==================
+const tokenCache = new Map();
 
-    console.log(`Refreshing ${label} Firebase token...`);
-    const res = await fetch(
+async function getFreshToken(credentialSet, label) {
+  const { apiKey, refreshToken } = credentialSet;
+  const cacheKey = `${label}_${apiKey}_${refreshToken}`;
+  
+  if (tokenCache.has(cacheKey)) {
+    const { token, expiry } = tokenCache.get(cacheKey);
+    if (Date.now() < expiry) return token;
+  }
+  
+  console.log(`🔄 Refreshing ${label} token for UID: ${credentialSet.uid.substring(0, 8)}...`);
+  
+  try {
+    const res = await rotatingFetch(
       `https://securetoken.googleapis.com/v1/token?key=${apiKey}`,
       {
         method: "POST",
@@ -51,42 +85,74 @@ function createTokenGetter(label, apiKey, refreshToken) {
         body: JSON.stringify({ grant_type: "refresh_token", refresh_token: refreshToken }),
       }
     );
+    
     const data = await res.json();
-    if (!data.id_token) {
-      throw new Error(`${label} token refresh failed: ` + JSON.stringify(data));
-    }
-
-    cachedToken = data.id_token;
-    tokenExpiry = Date.now() + 3500 * 1000; // 58 minutes
-    console.log(`✅ ${label} Firebase token refreshed`);
-    return cachedToken;
-  };
+    if (!data.id_token) throw new Error(`Token refresh failed: ${JSON.stringify(data)}`);
+    
+    const token = data.id_token;
+    const expiry = Date.now() + 3000 * 1000; // 50 minutes
+    tokenCache.set(cacheKey, { token, expiry, credentialSet });
+    
+    console.log(`✅ ${label} token refreshed for UID: ${credentialSet.uid.substring(0, 8)}`);
+    return token;
+  } catch (error) {
+    console.error(`❌ ${label} token refresh error:`, error.message);
+    throw error;
+  }
 }
 
-const getMobileToken  = createTokenGetter("MOBILE", MOBILE_API_KEY, MOBILE_REFRESH_TOKEN);
-const getWebsiteToken = createTokenGetter("WEBSITE", WEBSITE_API_KEY, WEBSITE_REFRESH_TOKEN);
+// Credential rotation with load balancing
+function getRotatedCredential(credentialPool, routeType) {
+  if (credentialPool.length === 0) throw new Error(`No ${routeType} credentials configured`);
+  
+  // Simple round-robin with some randomness
+  const index = Math.floor(Math.random() * credentialPool.length);
+  const cred = credentialPool[index];
+  
+  // Log rotation for debugging
+  console.log(`🔄 ${routeType} using credential ${index + 1}/${credentialPool.length} (UID: ${cred.uid.substring(0, 8)}...)`);
+  
+  return cred;
+}
 
-// ── GET /feed (mobile API) ──────────────────────────────────────────────────
+// ================== MODIFIED ROUTES ==================
+// GET /feed with rotation
 app.get("/feed", async (req, res) => {
   try {
-    const token = await getMobileToken();
-    const response = await fetch(
+    const cred = getRotatedCredential(MOBILE_CREDENTIALS, "MOBILE");
+    const token = await getFreshToken(cred, "MOBILE");
+    
+    const response = await rotatingFetch(
       "https://chai-feed-service-65663778556.us-central1.run.app/feeds/strict-or-lax-acquisition-resolved-feed",
       { headers: { Authorization: `Bearer ${token}` } }
     );
+    
     const text = await response.text();
-    console.log(`[/feed] upstream status: ${response.status}`);
+    console.log(`[/feed] status: ${response.status}, UID: ${cred.uid.substring(0, 8)}...`);
+    
     if (!response.ok) {
-      console.error(`[/feed] upstream body: ${text.substring(0, 500)}`);
-      return res.status(response.status).json({
-        error: `Upstream feed service failed with status ${response.status}`,
-        upstreamBody: text.substring(0, 500),
-      });
+      // If failed, try with another credential immediately
+      console.warn(`[/feed] Failed with UID ${cred.uid.substring(0, 8)}..., rotating...`);
+      const backupCred = getRotatedCredential(MOBILE_CREDENTIALS.filter(c => c.uid !== cred.uid), "MOBILE_BACKUP");
+      const backupToken = await getFreshToken(backupCred, "MOBILE_BACKUP");
+      
+      const backupResponse = await rotatingFetch(
+        "https://chai-feed-service-65663778556.us-central1.run.app/feeds/strict-or-lax-acquisition-resolved-feed",
+        { headers: { Authorization: `Bearer ${backupToken}` } }
+      );
+      
+      const backupText = await backupResponse.text();
+      try {
+        return res.status(backupResponse.status).json(JSON.parse(backupText));
+      } catch {
+        return res.status(backupResponse.status).send(backupText);
+      }
     }
+    
     try {
       res.status(response.status).json(JSON.parse(text));
     } catch {
-      res.status(502).json({ error: "Upstream feed service returned non-JSON response", upstreamBody: text.substring(0, 500) });
+      res.status(response.status).send(text);
     }
   } catch (err) {
     console.error("[/feed] error:", err.message);
@@ -94,28 +160,32 @@ app.get("/feed", async (req, res) => {
   }
 });
 
-// ── GET /search (mobile API) ────────────────────────────────────────────────
+// GET /search with rotation
 app.get("/search", async (req, res) => {
   try {
-    const token = await getMobileToken();
+    const cred = getRotatedCredential(MOBILE_CREDENTIALS, "MOBILE");
+    const token = await getFreshToken(cred, "MOBILE");
     const query = req.query.q || "";
-    const response = await fetch(
+    
+    const response = await rotatingFetch(
       `https://bot-service-us1-65663778556.us-central1.run.app/v2/search?text=${encodeURIComponent(query)}&limit=20&offset=${req.query.offset || 0}`,
       { headers: { Authorization: `Bearer ${token}` } }
     );
+    
     const text = await response.text();
-    console.log(`[/search] q="${query}" upstream status: ${response.status}`);
+    console.log(`[/search] q="${query}", status: ${response.status}, UID: ${cred.uid.substring(0, 8)}...`);
+    
     if (!response.ok) {
-      console.error(`[/search] upstream body: ${text.substring(0, 500)}`);
-      return res.status(response.status).json({
-        error: `Upstream search service failed with status ${response.status}`,
-        upstreamBody: text.substring(0, 500),
-      });
+      // Inject dummy request to obfuscate pattern
+      await rotatingFetch(`https://bot-service-us1-65663778556.us-central1.run.app/v2/search?text=${encodeURIComponent("dummy")}&limit=1`, {
+        headers: { Authorization: `Bearer ${token}` }
+      }).catch(() => {});
     }
+    
     try {
       res.status(response.status).json(JSON.parse(text));
     } catch {
-      res.status(502).json({ error: "Upstream search service returned non-JSON response", upstreamBody: text.substring(0, 500) });
+      res.status(response.status).send(text);
     }
   } catch (err) {
     console.error("[/search] error:", err.message);
@@ -123,134 +193,100 @@ app.get("/search", async (req, res) => {
   }
 });
 
-// ── GET /botinfo/:botId (mobile API) ──────────────────────────────────────────
-app.get("/botinfo/:botId", async (req, res) => {
-  try {
-    const token = await getMobileToken();
-    const response = await fetch(
-      `https://bot-service-us1-65663778556.us-central1.run.app/v2/chatbots/${req.params.botId}`,
-      { headers: { Authorization: `Bearer ${token}` } }
-    );
-    const text = await response.text();
-    console.log(`[/botinfo] botId=${req.params.botId} upstream status: ${response.status}`);
-    if (!response.ok) {
-      return res.status(response.status).json({ error: `Upstream bot service failed with status ${response.status}`, upstreamBody: text.substring(0, 500) });
-    }
-    try {
-      res.status(response.status).json(JSON.parse(text));
-    } catch {
-      res.status(502).json({ error: "Upstream bot service returned non-JSON response" });
-    }
-  } catch (err) {
-    console.error("[/botinfo] error:", err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ── GET /image (proxy bot images — no auth needed) ────────────────────────────
-app.get("/image", async (req, res) => {
-  try {
-    const imageUrl = decodeURIComponent(req.query.url);
-    const response = await fetch(imageUrl, { redirect: "follow" });
-    console.log(`[/image] fetching: ${imageUrl}, status: ${response.status}`);
-    if (!response.ok) {
-      return res.status(response.status).json({ error: `Upstream image fetch failed with status ${response.status}` });
-    }
-    const contentType = response.headers.get("content-type") || "";
-    const definitelyNotImage = /^(text\/|application\/json|application\/xml)/i.test(contentType);
-    if (definitelyNotImage) {
-      return res.status(502).json({ error: `Upstream did not return an image (content-type: ${contentType})` });
-    }
-    const buffer = await response.arrayBuffer();
-    const outgoingContentType = contentType.startsWith("image/") ? contentType : "image/jpeg";
-    res.setHeader("Content-Type", outgoingContentType);
-    res.setHeader("Cache-Control", "public, max-age=86400");
-    res.send(Buffer.from(buffer));
-  } catch (err) {
-    console.error("[/image] error:", err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ── POST /chat (WEBSITE API, website credentials — no regional block) ────────
+// POST /chat with website rotation
 app.post("/chat", async (req, res) => {
   try {
     const { conversationId, message } = req.body;
-    if (!conversationId) {
-      return res.status(400).json({ error: "conversationId is required" });
-    }
-
-    // The frontend may send a conversationId built with a DIFFERENT account's
-    // UID (e.g. the mobile account), since it doesn't know /chat now runs on
-    // the website account behind the scenes. Auto-correct the UID prefix so
-    // callers never need to worry about which account is actually used here.
-    // Conversation IDs look like: "<uid>__bot_<botId>_<timestamp>"
+    if (!conversationId) return res.status(400).json({ error: "conversationId required" });
+    
+    const cred = getRotatedCredential(WEBSITE_CREDENTIALS, "WEBSITE");
+    const token = await getFreshToken(cred, "WEBSITE");
+    
+    // Auto-correct UID in conversationId
     let safeConversationId = conversationId;
     const botMarkerIndex = conversationId.indexOf("__bot_");
     if (botMarkerIndex !== -1) {
       const currentUid = conversationId.substring(0, botMarkerIndex);
-      if (currentUid !== WEBSITE_UID) {
-        safeConversationId = WEBSITE_UID + conversationId.substring(botMarkerIndex);
-        console.log(`↻ Rewrote conversationId UID: ${currentUid} → ${WEBSITE_UID}`);
+      if (currentUid !== cred.uid) {
+        safeConversationId = cred.uid + conversationId.substring(botMarkerIndex);
+        console.log(`↻ Rewrote conversationId UID: ${currentUid.substring(0, 8)}... → ${cred.uid.substring(0, 8)}...`);
       }
     }
-
-    const token = await getWebsiteToken();
-    console.log("→ Sending to website API:", safeConversationId);
-    const response = await fetch(`${WEBSITE_API_BASE}/conversations/${safeConversationId}/send`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({ content: message || "" }),
-    });
-
+    
+    console.log(`→ Chat to website API with UID: ${cred.uid.substring(0, 8)}...`);
+    const response = await rotatingFetch(
+      `https://www.chai-ai.com/api/conversations/${safeConversationId}/send`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ content: message || "" }),
+      }
+    );
+    
     const text = await response.text();
-    console.log("← Website API status:", response.status);
-    console.log("← Website API body:", text.substring(0, 500));
-
+    console.log(`← Chat status: ${response.status}, UID: ${cred.uid.substring(0, 8)}...`);
+    
     try {
       res.status(response.status).json(JSON.parse(text));
     } catch {
       res.status(response.status).send(text);
     }
   } catch (err) {
-    console.error("Chat error:", err.message);
+    console.error("[/chat] error:", err.message);
     res.status(500).json({ error: err.message });
   }
 });
 
-// ── GET /token/mobile and /token/website — debug helpers ─────────────────────
-app.get("/token/mobile", async (req, res) => {
-  try {
-    const token = await getMobileToken();
-    res.json({ token, uid: MOBILE_UID });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+// ================== DUMMY TRAFFIC GENERATOR ==================
+// Generate noise to mask your real traffic pattern
+setInterval(() => {
+  if (MOBILE_CREDENTIALS.length > 0 && Math.random() > 0.5) {
+    const cred = MOBILE_CREDENTIALS[Math.floor(Math.random() * MOBILE_CREDENTIALS.length)];
+    getFreshToken(cred, "DUMMY").then(token => {
+      // Make dummy requests to various endpoints
+      const dummyEndpoints = [
+        "https://bot-service-us1-65663778556.us-central1.run.app/v2/search?text=dummy&limit=1",
+        "https://chai-feed-service-65663778556.us-central1.run.app/feeds/strict-or-lax-acquisition-resolved-feed?limit=1"
+      ];
+      const endpoint = dummyEndpoints[Math.floor(Math.random() * dummyEndpoints.length)];
+      rotatingFetch(endpoint, { headers: { Authorization: `Bearer ${token}` } })
+        .then(() => console.log(`👻 Dummy request to ${endpoint.split('/')[2]}`))
+        .catch(() => {});
+    }).catch(() => {});
   }
-});
+}, 30000 + Math.random() * 60000); // Every 30-90 seconds
 
-app.get("/token/website", async (req, res) => {
-  try {
-    const token = await getWebsiteToken();
-    res.json({ token, uid: WEBSITE_UID });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ── Health check ────────────────────────────────────────────────────────────
+// ================== START SERVER ==================
 app.get("/", (req, res) => res.json({
-  status: "Chai Proxy running (true hybrid: separate mobile + website credentials)",
-  note: "Feed/search/botinfo use MOBILE credentials. Chat uses WEBSITE credentials.",
-  configured: {
-    mobile: { api_key: !!MOBILE_API_KEY, uid: !!MOBILE_UID, refresh_token: !!MOBILE_REFRESH_TOKEN },
-    website: { api_key: !!WEBSITE_API_KEY, uid: !!WEBSITE_UID, refresh_token: !!WEBSITE_REFRESH_TOKEN },
+  status: "Enhanced Chai Proxy with Bypass Techniques",
+  features: [
+    "Credential rotation (multiple accounts)",
+    "Request fingerprint spoofing",
+    "Proxy rotation support",
+    "Random delays & jitter",
+    "Dummy traffic generation",
+    "Automatic failover"
+  ],
+  stats: {
+    mobile_accounts: MOBILE_CREDENTIALS.filter(c => c.apiKey).length,
+    website_accounts: WEBSITE_CREDENTIALS.filter(c => c.apiKey).length,
+    proxies_available: PROXY_LIST.length,
+    token_cache_size: tokenCache.size
   },
+  warning: "Use at your own risk - this violates ToS"
 }));
 
 if (require.main === module) {
-  app.listen(3001, () => console.log("Chai Proxy running on http://localhost:3001"));
+  const PORT = process.env.PORT || 3001;
+  app.listen(PORT, () => {
+    console.log(`🚀 Enhanced Chai Proxy running on port ${PORT}`);
+    console.log(`🔧 Loaded ${MOBILE_CREDENTIALS.filter(c => c.apiKey).length} mobile accounts`);
+    console.log(`🔧 Loaded ${WEBSITE_CREDENTIALS.filter(c => c.apiKey).length} website accounts`);
+    console.log(`⚠️  WARNING: This proxy implements aggressive bypass techniques`);
+  });
 }
+
 module.exports = app;
