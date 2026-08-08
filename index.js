@@ -10,8 +10,8 @@ app.use(express.json());
 
 // ── Firebase Credentials (for both mobile and website API) ───────────────────
 const FIREBASE_API_KEY = "AIzaSyDlCazdn_bziqDVwQkDroR8eK4GVaEHawU";
-const CHAI_UID         = "5UjcH6R0zWYwzLciAX7lz9F3Sz02";
-const REFRESH_TOKEN    = "AMf-vBxABjgCQ0SoRCymcdUbckokYPr9aPJ7-zsy6cFeXMioykMeSSGJiF4Vpi1tqic6HqzfaTmNWDPAo1Z-WBAEFGAuY_tGRt_fyujgs4zhwj7FnvFIp-ZKWM4RsX8sO5qwVZ6gRVFn5eo8kehreZbOCblhhqMMqgaR-EgI_whH4uVWONzzR_QqZnOfWA_yRrEuxAQy4YwoA6znvXbLNz-v21MJbhrzLQiZ6Vc--XuUWqD9Z09f5W2KLfU-8Zq96LPygwE2LS-BLQCqrLCxFzQEVOLRH_422e68fhEbmwv3cvJitPo3LoPas1VO4XCAvULjjT0HC6SjbG6ko03H1VW-NOCCbOTpmlXfrvIUVO-g0bcCsCYLZIL0WMgz5V9PvJ1LYPz4QKBv";
+const CHAI_UID         = "o5YR55rHXBYiPTVt4Lx2rw9wu0q1";
+const REFRESH_TOKEN    = "AMf-vBxCRi4zdN22KUr5zLBlEVieHi3bXJvTFg2Oy-yh0acOD3DE9_D1nK9Ehxt1LXMLQmgMa79xvT1Tbj5cpmrUxBQIIZz5etU9nCrhftZujMd_YK6HHjiq8S_g9JyIT_mcVvZCea0jVv-lBG3vsyUjDa-cf02w5TYtmuu5gHCrW6ZI4CzJoxEFTqrk0WaccvxsCLRUDCGE3xBzXzlUMgxpd3A0zxki864Mgd0-vkUtWh4pqneWOVqF037tQITPy7udR5e8w3Nf76IanVERzwmvrAQs4qZPgavr-OofpiA91fXwt9Xz3x6NUjW8zgxBVOsb9EN0Av4aY5hKkzRQUId6H0gGcxBcaC-YR5vFBPKYmbMl6SxD1sX_MKrf6R6zzn9PkLCAtNBzTcuWJjenL_hecLMvxB-UeWZygdohg4YuXDEHQ1E27VA";
 
 // ── Website API Base ────────────────────────────────────────────────────────
 const WEBSITE_API_BASE = "https://www.chai-ai.com/api";
