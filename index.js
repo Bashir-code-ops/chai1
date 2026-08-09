@@ -318,6 +318,48 @@ app.patch("/memory", async (req, res) => {
   }
 });
 
+// ── GET /persona?botId=xxx — get bot's structured personality/appearance data ──
+app.get("/persona", async (req, res) => {
+  try {
+    const { botId } = req.query;
+    if (!botId) {
+      return res.status(400).json({ error: "botId is required" });
+    }
+    const token = await getFreshToken();
+    // conversation_id pattern inferred from a real captured request:
+    // {firebase_uid}_{bot_uid}_{timestamp} — not fully confirmed, may need adjustment
+    // if this endpoint rejects constructed values.
+    const conversationId = `${CHAI_UID}_${botId}_${Date.now()}`;
+    const url = `https://www.chai-ai.com/api/persona/prefill?bot_uid=${encodeURIComponent(botId)}&conversation_id=${encodeURIComponent(conversationId)}`;
+    console.log(`[/persona] botId=${botId} url=${url}`);
+    const response = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const text = await response.text();
+    console.log(`[/persona] upstream status: ${response.status}`);
+    if (!response.ok) {
+      console.error(`[/persona] upstream failed with status ${response.status}, body: ${text.substring(0, 500)}`);
+      return res.status(response.status).json({
+        error: `Upstream persona service failed with status ${response.status}`,
+        upstreamBody: text.substring(0, 500),
+      });
+    }
+    try {
+      const data = JSON.parse(text);
+      res.status(response.status).json(data);
+    } catch (parseErr) {
+      console.error(`[/persona] upstream returned non-JSON despite ${response.status}: ${text.substring(0, 500)}`);
+      res.status(502).json({
+        error: "Upstream persona service returned non-JSON response",
+        upstreamBody: text.substring(0, 500),
+      });
+    }
+  } catch (err) {
+    console.error("[/persona] error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── GET /token ────────────────────────────────────────────────────────────────
 app.get("/token", async (req, res) => {
   try {
