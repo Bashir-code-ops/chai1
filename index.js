@@ -282,12 +282,17 @@ app.post("/chat", async (req, res) => {
       response = result.resp;
       text = result.bodyText;
 
-      if (response.status !== 429 || !isMessageLimitError(text)) {
+      if (response.status !== 429 && response.status !== 500) {
         usedAccountIndex = i;
         finalConversationId = convId;
-        break; // success, or a non-rate-limit failure — stop trying more accounts
+        break; // success, or a real (non-retryable) failure — stop trying more accounts
       }
-      console.log(`↻ Account [${i}] (${account.uid}) hit its daily limit, trying next account...`);
+      if (response.status === 429 && !isMessageLimitError(text)) {
+        usedAccountIndex = i;
+        finalConversationId = convId;
+        break; // a 429 that ISN'T our rate-limit signature — treat as final
+      }
+      console.log(`↻ Account [${i}] (${account.uid}) failed (status ${response.status}), trying next account...`);
     }
 
     console.log("← Website API status:", response.status);
