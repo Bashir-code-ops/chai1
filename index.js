@@ -10,6 +10,13 @@ const CHAI_UID         = "5UjcH6R0zWYwzLciAX7lz9F3Sz02";
 const REFRESH_TOKEN    = "AMf-vBxABjgCQ0SoRCymcdUbckokYPr9aPJ7-zsy6cFeXMioykMeSSGJiF4Vpi1tqic6HqzfaTmNWDPAo1Z-WBAEFGAuY_tGRt_fyujgs4zhwj7FnvFIp-ZKWM4RsX8sO5qwVZ6gRVFn5eo8kehreZbOCblhhqMMqgaR-EgI_whH4uVWONzzR_QqZnOfWA_yRrEuxAQy4YwoA6znvXbLNz-v21MJbhrzLQiZ6Vc--XuUWqD9Z09f5W2KLfU-8Zq96LPygwE2LS-BLQCqrLCxFzQEVOLRH_422e68fhEbmwv3cvJitPo3LoPas1VO4XCAvULjjT0HC6SjbG6ko03H1VW-NOCCbOTpmlXfrvIUVO-g0bcCsCYLZIL0WMgz5V9PvJ1LYPz4QKBv";
 const BOT_RESPONDER    = "https://bot-responder-eu-shdxwd54ta-nw.a.run.app";
 
+// ── Second Firebase project (website session) — needed for /persona ────────────
+// The website (chai-ai.com) runs on a separate Firebase project from the mobile
+// API, so it requires its own refresh token / UID, not the mobile CHAI_UID above.
+const WEBSITE_FIREBASE_API_KEY = "AIzaSyCamhWkk4T2wZhYxuZ-NkOj761G5Cj9x6U";
+const WEBSITE_UID           = "xkpkpzmfjibJF9XODfv9rkhn9bA3";
+const WEBSITE_REFRESH_TOKEN = "AMf-vBwvhu7MXgE0rVEg9ABrhpFaA5VTIvr-E7m6tyvnX4q-jvx2SFQ8BGtmTYYSae2uUNHLhKEK7TI3uRkaj38rYm2eNXGs6IbW-f1JEzN3eQh1Yrso_7mIGNSxQKAg7U1H_qGyFWhnOQdWYqkHYLNAeONSLNsjDzQzc4MH9Zq87GreOkh_6BheEpHlccZYf0mFEtYYq_j9RbA8_kUz7Dl8-Xx3I0AafNs2THqmVE95cQFnXPh2nL3j1y2yUguyvrldcCwGp27fSBulSVveMRlfjYUBMwIJLvsYbkDuJiJnmStAqa9wlK-__Tlq90Z_5S4MdjOhaVs_z2ChQEE47Gscw4Eh9ML33vHzypDx7zYAtvLCUzQkyIrYuAW8rUZXrXBr5rJvKx3IZhpRzYSwGfqyuvzqb5N_29V6rAHfNggs_1WSwwclFZs";
+
 // ── Token cache ───────────────────────────────────────────────────────────────
 let cachedToken = null;
 let tokenExpiry = 0;
@@ -30,6 +37,27 @@ async function getFreshToken() {
   tokenExpiry = Date.now() + 3500 * 1000;
   console.log("✅ Token refreshed");
   return cachedToken;
+}
+
+let cachedWebsiteToken = null;
+let websiteTokenExpiry = 0;
+
+async function getFreshWebsiteToken() {
+  if (cachedWebsiteToken && Date.now() < websiteTokenExpiry) return cachedWebsiteToken;
+  const res = await fetch(
+    `https://securetoken.googleapis.com/v1/token?key=${WEBSITE_FIREBASE_API_KEY}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ grant_type: "refresh_token", refresh_token: WEBSITE_REFRESH_TOKEN }),
+    }
+  );
+  const data = await res.json();
+  if (!data.id_token) throw new Error("Website token refresh failed: " + JSON.stringify(data));
+  cachedWebsiteToken = data.id_token;
+  websiteTokenExpiry = Date.now() + 3500 * 1000;
+  console.log("✅ Website token refreshed");
+  return cachedWebsiteToken;
 }
 
 // ── GET /feed ─────────────────────────────────────────────────────────────────
@@ -325,11 +353,11 @@ app.get("/persona", async (req, res) => {
     if (!botId) {
       return res.status(400).json({ error: "botId is required" });
     }
-    const token = await getFreshToken();
+    const token = await getFreshWebsiteToken();
     // conversation_id pattern inferred from a real captured request:
-    // {firebase_uid}_{bot_uid}_{timestamp} — not fully confirmed, may need adjustment
-    // if this endpoint rejects constructed values.
-    const conversationId = `${CHAI_UID}_${botId}_${Date.now()}`;
+    // {firebase_uid}_{bot_uid}_{timestamp} — uses the WEBSITE_UID since this
+    // endpoint lives on the website's Firebase project, not the mobile one.
+    const conversationId = `${WEBSITE_UID}_${botId}_${Date.now()}`;
     const url = `https://www.chai-ai.com/api/persona/prefill?bot_uid=${encodeURIComponent(botId)}&conversation_id=${encodeURIComponent(conversationId)}`;
     console.log(`[/persona] botId=${botId} url=${url}`);
     const response = await fetch(url, {
