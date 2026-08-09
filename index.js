@@ -248,7 +248,8 @@ app.post("/chat", async (req, res) => {
 
     function isMessageLimitError(bodyText) {
       try {
-        return JSON.parse(bodyText)?.detail?.error === "message_limit_reached";
+        const errCode = JSON.parse(bodyText)?.detail?.error || "";
+        return errCode.startsWith("message_limit_reached");
       } catch {
         return false;
       }
