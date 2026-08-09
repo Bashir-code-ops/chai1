@@ -4,99 +4,38 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ── TRUE Hybrid: two SEPARATE Firebase projects/accounts ─────────────────────
-// The mobile app and the website are different Firebase projects, even for the
-// same Chai account — a token minted in one project is NOT valid in the other.
-// So we keep two fully independent credential sets and token caches.
-//
-//   MOBILE credentials → feed / search / botinfo / image (unrestricted)
-//   WEBSITE credentials → chat only (avoids bot-responder's regional block)
+// ── Credentials ──────────────────────────────────────────────────────────────
+const FIREBASE_API_KEY = "AIzaSyDlCazdn_bziqDVwQkDroR8eK4GVaEHawU";
+const CHAI_UID         = "5UjcH6R0zWYwzLciAX7lz9F3Sz02";
+const REFRESH_TOKEN    = "AMf-vBxABjgCQ0SoRCymcdUbckokYPr9aPJ7-zsy6cFeXMioykMeSSGJiF4Vpi1tqic6HqzfaTmNWDPAo1Z-WBAEFGAuY_tGRt_fyujgs4zhwj7FnvFIp-ZKWM4RsX8sO5qwVZ6gRVFn5eo8kehreZbOCblhhqMMqgaR-EgI_whH4uVWONzzR_QqZnOfWA_yRrEuxAQy4YwoA6znvXbLNz-v21MJbhrzLQiZ6Vc--XuUWqD9Z09f5W2KLfU-8Zq96LPygwE2LS-BLQCqrLCxFzQEVOLRH_422e68fhEbmwv3cvJitPo3LoPas1VO4XCAvULjjT0HC6SjbG6ko03H1VW-NOCCbOTpmlXfrvIUVO-g0bcCsCYLZIL0WMgz5V9PvJ1LYPz4QKBv";
+const BOT_RESPONDER    = "https://bot-responder-eu-shdxwd54ta-nw.a.run.app";
 
-// ── Mobile credentials ─────────────────────────────────────────────────────
-const MOBILE_API_KEY      = process.env.MOBILE_FIREBASE_API_KEY || "";
-const MOBILE_UID          = process.env.MOBILE_CHAI_UID || "";
-const MOBILE_REFRESH_TOKEN = process.env.MOBILE_REFRESH_TOKEN || "";
+// ── Token cache ───────────────────────────────────────────────────────────────
+let cachedToken = null;
+let tokenExpiry = 0;
 
-// ── Website credentials — MULTIPLE accounts for automatic fallback ──────────
-// Each website account has its own daily message cap (~4/day observed). When
-// one account gets rate-limited, /chat automatically tries the next one.
-//
-// Set WEBSITE_ACCOUNTS as a JSON array in Vercel, e.g.:
-// [{"uid":"o5YR55rHXBYiPTVt4Lx2rw9wu0q1","refreshToken":"AMf-vBz..."}, {"uid":"...","refreshToken":"..."}]
-//
-// All website accounts share the SAME Firebase project/API key (it's the same
-// chai-ai.com app, just different logged-in users), so one key covers all of them.
-const WEBSITE_API_KEY = process.env.WEBSITE_FIREBASE_API_KEY || "";
-let WEBSITE_ACCOUNTS = [];
-try {
-  WEBSITE_ACCOUNTS = JSON.parse(process.env.WEBSITE_ACCOUNTS || "[]");
-} catch (e) {
-  console.error("❌ Failed to parse WEBSITE_ACCOUNTS env var as JSON:", e.message);
-}
-
-const WEBSITE_API_BASE = "https://www.chai-ai.com/api";
-
-for (const [name, val] of Object.entries({
-  MOBILE_API_KEY, MOBILE_UID, MOBILE_REFRESH_TOKEN, WEBSITE_API_KEY,
-})) {
-  if (!val) console.warn(`⚠️  ${name} is not set`);
-}
-if (WEBSITE_ACCOUNTS.length === 0) {
-  console.warn("⚠️  WEBSITE_ACCOUNTS is empty or invalid — /chat will have no accounts to use");
-} else {
-  console.log(`ℹ️  Loaded ${WEBSITE_ACCOUNTS.length} website account(s) for /chat fallback`);
-}
-
-// ── Generic token-cache factory — one instance per credential set ────────────
-function createTokenGetter(label, apiKey, refreshToken) {
-  let cachedToken = null;
-  let tokenExpiry = 0;
-
-  return async function getFreshToken() {
-    if (cachedToken && Date.now() < tokenExpiry) return cachedToken;
-    if (!apiKey || !refreshToken) {
-      throw new Error(`${label}: API key / refresh token not configured on the proxy.`);
+async function getFreshToken() {
+  if (cachedToken && Date.now() < tokenExpiry) return cachedToken;
+  const res = await fetch(
+    `https://securetoken.googleapis.com/v1/token?key=${FIREBASE_API_KEY}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ grant_type: "refresh_token", refresh_token: REFRESH_TOKEN }),
     }
-
-    console.log(`🔄 Refreshing ${label} token...`);
-    try {
-      const res = await fetch(
-        `https://securetoken.googleapis.com/v1/token?key=${apiKey}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ grant_type: "refresh_token", refresh_token: refreshToken }),
-        }
-      );
-      const data = await res.json();
-      console.log(`🔄 ${label} token refresh response:`, JSON.stringify(data));
-      if (!data.id_token) {
-        throw new Error(`${label} token refresh failed: ` + JSON.stringify(data));
-      }
-
-      cachedToken = data.id_token;
-      tokenExpiry = Date.now() + 3500 * 1000; // 58 minutes
-      console.log(`✅ ${label} Firebase token refreshed`);
-      return cachedToken;
-    } catch (error) {
-      console.error(`❌ ${label} token refresh error:`, error.message, error.stack);
-      throw error;
-    }
-  };
+  );
+  const data = await res.json();
+  if (!data.id_token) throw new Error("Token refresh failed: " + JSON.stringify(data));
+  cachedToken = data.id_token;
+  tokenExpiry = Date.now() + 3500 * 1000;
+  console.log("✅ Token refreshed");
+  return cachedToken;
 }
 
-const getMobileToken = createTokenGetter("MOBILE", MOBILE_API_KEY, MOBILE_REFRESH_TOKEN);
-
-// One independent token cache PER website account, so we're not re-minting
-// tokens for an account we're not currently using.
-const websiteTokenGetters = WEBSITE_ACCOUNTS.map((acct, i) =>
-  createTokenGetter(`WEBSITE[${i}]:${acct.uid}`, WEBSITE_API_KEY, acct.refreshToken)
-);
-
-// ── GET /feed (mobile API) ──────────────────────────────────────────────────
+// ── GET /feed ─────────────────────────────────────────────────────────────────
 app.get("/feed", async (req, res) => {
   try {
-    const token = await getMobileToken();
+    const token = await getFreshToken();
     const response = await fetch(
       "https://chai-feed-service-65663778556.us-central1.run.app/feeds/strict-or-lax-acquisition-resolved-feed",
       { headers: { Authorization: `Bearer ${token}` } }
@@ -104,16 +43,21 @@ app.get("/feed", async (req, res) => {
     const text = await response.text();
     console.log(`[/feed] upstream status: ${response.status}`);
     if (!response.ok) {
-      console.error(`[/feed] upstream body: ${text.substring(0, 500)}`);
+      console.error(`[/feed] upstream failed with status ${response.status}, body: ${text.substring(0, 500)}`);
       return res.status(response.status).json({
         error: `Upstream feed service failed with status ${response.status}`,
         upstreamBody: text.substring(0, 500),
       });
     }
     try {
-      res.status(response.status).json(JSON.parse(text));
-    } catch {
-      res.status(502).json({ error: "Upstream feed service returned non-JSON response", upstreamBody: text.substring(0, 500) });
+      const data = JSON.parse(text);
+      res.status(response.status).json(data);
+    } catch (parseErr) {
+      console.error(`[/feed] upstream returned non-JSON despite ${response.status}: ${text.substring(0, 500)}`);
+      res.status(502).json({
+        error: "Upstream feed service returned non-JSON response",
+        upstreamBody: text.substring(0, 500),
+      });
     }
   } catch (err) {
     console.error("[/feed] error:", err.message);
@@ -121,28 +65,33 @@ app.get("/feed", async (req, res) => {
   }
 });
 
-// ── GET /search (mobile API) ────────────────────────────────────────────────
+// ── GET /search?q=xxx ─────────────────────────────────────────────────────────
 app.get("/search", async (req, res) => {
   try {
-    const token = await getMobileToken();
+    const token = await getFreshToken();
     const query = req.query.q || "";
     const response = await fetch(
       `https://bot-service-us1-65663778556.us-central1.run.app/v2/search?text=${encodeURIComponent(query)}&limit=20&offset=${req.query.offset || 0}`,
       { headers: { Authorization: `Bearer ${token}` } }
     );
     const text = await response.text();
-    console.log(`[/search] q="${query}" upstream status: ${response.status}`);
+    console.log(`[/search] q="${query}" offset=${req.query.offset || 0} upstream status: ${response.status}`);
     if (!response.ok) {
-      console.error(`[/search] upstream body: ${text.substring(0, 500)}`);
+      console.error(`[/search] upstream failed with status ${response.status}, body: ${text.substring(0, 500)}`);
       return res.status(response.status).json({
         error: `Upstream search service failed with status ${response.status}`,
         upstreamBody: text.substring(0, 500),
       });
     }
     try {
-      res.status(response.status).json(JSON.parse(text));
-    } catch {
-      res.status(502).json({ error: "Upstream search service returned non-JSON response", upstreamBody: text.substring(0, 500) });
+      const data = JSON.parse(text);
+      res.status(response.status).json(data);
+    } catch (parseErr) {
+      console.error(`[/search] upstream returned non-JSON despite ${response.status}: ${text.substring(0, 500)}`);
+      res.status(502).json({
+        error: "Upstream search service returned non-JSON response",
+        upstreamBody: text.substring(0, 500),
+      });
     }
   } catch (err) {
     console.error("[/search] error:", err.message);
@@ -150,45 +99,268 @@ app.get("/search", async (req, res) => {
   }
 });
 
-// ── GET /botinfo/:botId (mobile API) ──────────────────────────────────────────
-app.get("/botinfo/:botId", async (req, res) => {
+// ── POST /chat ────────────────────────────────────────────────────────────────
+app.post("/chat", async (req, res) => {
   try {
-    const token = await getMobileToken();
-    const response = await fetch(
-      `https://bot-service-us1-65663778556.us-central1.run.app/v2/chatbots/${req.params.botId}`,
-      { headers: { Authorization: `Bearer ${token}` } }
-    );
-    const text = await response.text();
-    console.log(`[/botinfo] botId=${req.params.botId} upstream status: ${response.status}`);
-    if (!response.ok) {
-      return res.status(response.status).json({ error: `Upstream bot service failed with status ${response.status}`, upstreamBody: text.substring(0, 500) });
+    const { botId, message, conversationId } = req.body;
+    if (!botId || !message) {
+      return res.status(400).json({ error: "botId and message are required" });
     }
+    const token = await getFreshToken();
+    const payload = {
+      user_uid:        CHAI_UID,
+      bot_uid:         botId,
+      conversation_id: conversationId || `${CHAI_UID}_${botId}`,
+      text:            message,
+      model:           "chai_v2",
+    };
+    console.log("→ Sending to bot-responder:", JSON.stringify(payload));
+    const response = await fetch(`${BOT_RESPONDER}/send_message`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${token}`,
+        "Content-Type":  "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+    const text = await response.text();
+    console.log("← Bot-responder status:", response.status);
+    console.log("← Bot-responder body:", text.substring(0, 500));
     try {
       res.status(response.status).json(JSON.parse(text));
     } catch {
-      res.status(502).json({ error: "Upstream bot service returned non-JSON response" });
+      res.status(response.status).send(text);
     }
   } catch (err) {
-    console.error("[/botinfo] error:", err.message);
+    console.error("Chat error:", err.message);
     res.status(500).json({ error: err.message });
   }
 });
 
-// ── GET /image (proxy bot images — no auth needed) ────────────────────────────
+// ── POST /retry — regenerate the bot's last response ────────────────────────────
+app.post("/retry", async (req, res) => {
+  try {
+    const { botId, message, conversationId } = req.body;
+    if (!botId || !message || !conversationId) {
+      return res.status(400).json({ error: "botId, message, and conversationId are required" });
+    }
+    const token = await getFreshToken();
+    const payload = {
+      user_uid:        CHAI_UID,
+      bot_uid:         botId,
+      conversation_id: conversationId,
+      text:            message,
+      model:           "chai_v2",
+    };
+    console.log("→ Sending retry to bot-responder:", JSON.stringify(payload));
+    const response = await fetch(`${BOT_RESPONDER}/retry_message`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${token}`,
+        "Content-Type":  "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+    const text = await response.text();
+    console.log("← Bot-responder retry status:", response.status);
+    console.log("← Bot-responder retry body:", text.substring(0, 500));
+    try {
+      res.status(response.status).json(JSON.parse(text));
+    } catch {
+      res.status(response.status).send(text);
+    }
+  } catch (err) {
+    console.error("Retry error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /edit — edit an existing message ────────────────────────────────────
+app.post("/edit", async (req, res) => {
+  try {
+    const { botId, message, conversationId } = req.body;
+    if (!botId || !message || !conversationId) {
+      return res.status(400).json({ error: "botId, message, and conversationId are required" });
+    }
+    const token = await getFreshToken();
+    const payload = {
+      user_uid:        CHAI_UID,
+      bot_uid:         botId,
+      conversation_id: conversationId,
+      text:            message,
+    };
+    console.log("→ Sending edit to bot-responder:", JSON.stringify(payload));
+    const response = await fetch(`${BOT_RESPONDER}/edit_message`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${token}`,
+        "Content-Type":  "application/json",
+        "idempotency-key": require("crypto").randomUUID(),
+      },
+      body: JSON.stringify(payload),
+    });
+    const text = await response.text();
+    console.log("← Bot-responder edit status:", response.status);
+    console.log("← Bot-responder edit body:", text.substring(0, 500));
+    try {
+      res.status(response.status).json(JSON.parse(text));
+    } catch {
+      res.status(response.status).send(text);
+    }
+  } catch (err) {
+    console.error("Edit error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── DELETE /message — delete a specific message from a conversation ─────────────
+app.delete("/message", async (req, res) => {
+  try {
+    const { conversationId, messageId } = req.body;
+    if (!conversationId || !messageId) {
+      return res.status(400).json({ error: "conversationId and messageId are required" });
+    }
+    const token = await getFreshToken();
+    const url = `https://bot-responder-eu-65663778556.europe-west2.run.app/${conversationId}/messages/${messageId}`;
+    console.log("→ Deleting message:", url);
+    const response = await fetch(url, {
+      method: "DELETE",
+      headers: {
+        "Authorization": `Bearer ${token}`,
+        "Content-Type": "application/json",
+        "idempotency-key": require("crypto").randomUUID(),
+      },
+    });
+    const text = await response.text();
+    console.log("← Delete status:", response.status);
+    console.log("← Delete body:", text.substring(0, 500));
+    try {
+      res.status(response.status).json(JSON.parse(text));
+    } catch {
+      res.status(response.status).send(text);
+    }
+  } catch (err) {
+    console.error("Delete error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /history — fetch conversation message history (paginate) ──────────────
+app.post("/history", async (req, res) => {
+  try {
+    const { conversationId, limit, lastTs } = req.body;
+    if (!conversationId) {
+      return res.status(400).json({ error: "conversationId is required" });
+    }
+    const token = await getFreshToken();
+    const url = `${BOT_RESPONDER}/${conversationId}/paginate`;
+    const payload = {
+      user_uid: CHAI_UID,
+      limit: limit || 10,
+      last_ts: lastTs || null,
+    };
+    console.log("→ Fetching history:", url, JSON.stringify(payload));
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+    const text = await response.text();
+    console.log("← History status:", response.status);
+    console.log("← History body:", text.substring(0, 800));
+    try {
+      res.status(response.status).json(JSON.parse(text));
+    } catch {
+      res.status(response.status).send(text);
+    }
+  } catch (err) {
+    console.error("History error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── PATCH /memory — save bot memory/backstory for a conversation ────────────────
+app.patch("/memory", async (req, res) => {
+  try {
+    const { conversationId, backstory } = req.body;
+    if (!conversationId || backstory === undefined) {
+      return res.status(400).json({ error: "conversationId and backstory are required" });
+    }
+    const token = await getFreshToken();
+    const url = `${BOT_RESPONDER}/conversations/${conversationId}`;
+    const payload = {
+      user_uid: CHAI_UID,
+      bot_config: { backstory },
+    };
+    console.log("→ Saving memory:", url, JSON.stringify(payload));
+    const response = await fetch(url, {
+      method: "PATCH",
+      headers: {
+        "Authorization": `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+    const text = await response.text();
+    console.log("← Memory save status:", response.status);
+    console.log("← Memory save body:", text.substring(0, 500));
+    try {
+      res.status(response.status).json(JSON.parse(text));
+    } catch {
+      res.status(response.status).send(text);
+    }
+  } catch (err) {
+    console.error("Memory save error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /token ────────────────────────────────────────────────────────────────
+app.get("/token", async (req, res) => {
+  try {
+    const token = await getFreshToken();
+    res.json({ token, uid: CHAI_UID });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /image?url=... ────────────────────────────────────────────────────────
 app.get("/image", async (req, res) => {
   try {
     const imageUrl = decodeURIComponent(req.query.url);
     const response = await fetch(imageUrl, { redirect: "follow" });
-    console.log(`[/image] fetching: ${imageUrl}, status: ${response.status}`);
+
+    console.log(`[/image] fetching: ${imageUrl}`);
+    console.log(`[/image] upstream status: ${response.status}, content-type: ${response.headers.get("content-type")}`);
+
     if (!response.ok) {
-      return res.status(response.status).json({ error: `Upstream image fetch failed with status ${response.status}` });
+      console.error(`[/image] upstream failed with status ${response.status} for ${imageUrl}`);
+      return res.status(response.status).json({
+        error: `Upstream image fetch failed with status ${response.status}`,
+        url: imageUrl,
+      });
     }
+
     const contentType = response.headers.get("content-type") || "";
+    // Chai's own CDN (images.chai.ml) sometimes sends "application/octet-stream"
+    // for genuinely valid images, so we can't strictly require an "image/" prefix.
+    // Only reject content-types that are clearly NOT image data (html error pages, json, text).
     const definitelyNotImage = /^(text\/|application\/json|application\/xml)/i.test(contentType);
     if (definitelyNotImage) {
-      return res.status(502).json({ error: `Upstream did not return an image (content-type: ${contentType})` });
+      console.error(`[/image] rejected non-image content-type "${contentType}" for ${imageUrl}`);
+      return res.status(502).json({
+        error: `Upstream did not return an image (content-type: ${contentType})`,
+        url: imageUrl,
+      });
     }
+
     const buffer = await response.arrayBuffer();
+    // If upstream sent a generic/octet-stream type, force a sane image content-type
+    // so the browser actually renders it instead of treating it as a download/blob.
     const outgoingContentType = contentType.startsWith("image/") ? contentType : "image/jpeg";
     res.setHeader("Content-Type", outgoingContentType);
     res.setHeader("Cache-Control", "public, max-age=86400");
@@ -199,151 +371,158 @@ app.get("/image", async (req, res) => {
   }
 });
 
-// Remembers which conversationId each (account, bot) pair is actually using,
-// since each account gets its own timestamp when a conversation is created —
-// reusing one account's timestamp for another account 500s (conversation
-// doesn't exist for them). Best-effort, in-memory only (resets on cold start,
-// but that's fine — a fresh conversationId gets created again automatically).
-const accountBotConversations = new Map(); // key: "accountIndex:botId" -> conversationId
-
-// ── POST /chat (WEBSITE API, rotates across multiple accounts on 429) ────────
-app.post("/chat", async (req, res) => {
+// ── GET /user/:userId — get creator profile ───────────────────────────────────
+app.get("/user/:userId", async (req, res) => {
   try {
-    const { conversationId, message } = req.body;
-    if (!conversationId) {
-      return res.status(400).json({ error: "conversationId is required" });
+    const token = await getFreshToken();
+    const response = await fetch(
+      `https://chai-user-service-65663778556.us-central1.run.app/users/${req.params.userId}`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    const text = await response.text();
+    console.log(`[/user] userId=${req.params.userId} upstream status: ${response.status}`);
+    if (!response.ok) {
+      console.error(`[/user] upstream failed with status ${response.status}, body: ${text.substring(0, 500)}`);
+      return res.status(response.status).json({
+        error: `Upstream user service failed with status ${response.status}`,
+        upstreamBody: text.substring(0, 500),
+      });
     }
-    if (WEBSITE_ACCOUNTS.length === 0) {
-      return res.status(500).json({ error: "No website accounts configured (WEBSITE_ACCOUNTS is empty)." });
+    try {
+      const data = JSON.parse(text);
+      res.status(response.status).json(data);
+    } catch (parseErr) {
+      console.error(`[/user] upstream returned non-JSON despite ${response.status}: ${text.substring(0, 500)}`);
+      res.status(502).json({
+        error: "Upstream user service returned non-JSON response",
+        upstreamBody: text.substring(0, 500),
+      });
     }
+  } catch (err) {
+    console.error("[/user] error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
 
-    // Extracts just the botId out of "<uid>__bot_<botId>_<timestamp>"
-    function getBotId(convId) {
-      const idx = convId.indexOf("__bot_");
-      if (idx === -1) return null;
-      const rest = convId.substring(idx + "__bot_".length); // "<botId>_<timestamp>"
-      return rest.replace(/_\d+$/, "");
+// ── GET /personas — list the user's saved personas ────────────────────────────
+app.get("/personas", async (req, res) => {
+  try {
+    const token = await getFreshToken();
+    const response = await fetch(
+      "https://chai-user-service-65663778556.us-central1.run.app/personas",
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    const text = await response.text();
+    console.log(`[/personas GET] upstream status: ${response.status}`);
+    if (!response.ok) {
+      console.error(`[/personas GET] upstream failed with status ${response.status}, body: ${text.substring(0, 500)}`);
+      return res.status(response.status).json({
+        error: `Upstream persona service failed with status ${response.status}`,
+        upstreamBody: text.substring(0, 500),
+      });
     }
-    const botId = getBotId(conversationId);
-    const originalUid = botId ? conversationId.substring(0, conversationId.indexOf("__bot_")) : null;
+    try {
+      res.status(response.status).json(JSON.parse(text));
+    } catch (parseErr) {
+      console.error(`[/personas GET] upstream returned non-JSON: ${text.substring(0, 500)}`);
+      res.status(502).json({ error: "Upstream persona service returned non-JSON response" });
+    }
+  } catch (err) {
+    console.error("[/personas GET] error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
 
-    async function sendAs(accountIndex, convId) {
-      const account = WEBSITE_ACCOUNTS[accountIndex];
-      const token = await websiteTokenGetters[accountIndex]();
-      const resp = await fetch(`${WEBSITE_API_BASE}/conversations/${convId}/send`, {
+// ── POST /personas — create a new persona ──────────────────────────────────────
+app.post("/personas", async (req, res) => {
+  try {
+    const { name, description, image_url } = req.body;
+    if (!name) {
+      return res.status(400).json({ error: "name is required" });
+    }
+    const token = await getFreshToken();
+    const payload = {
+      name,
+      description: description || "",
+      image_url: image_url || null,
+      is_system_persona: false,
+    };
+    console.log("[/personas POST] creating:", JSON.stringify(payload));
+    const response = await fetch(
+      "https://chai-user-service-65663778556.us-central1.run.app/personas",
+      {
         method: "POST",
         headers: {
+          "Authorization": `Bearer ${token}`,
           "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ content: message || "" }),
-      });
-      const bodyText = await resp.text();
-      return { resp, bodyText };
-    }
-
-    function isMessageLimitError(bodyText) {
-      try {
-        return JSON.parse(bodyText)?.detail?.error === "message_limit_reached";
-      } catch {
-        return false;
+        body: JSON.stringify(payload),
       }
-    }
-
-    let response, text, usedAccountIndex, finalConversationId;
-
-    for (let i = 0; i < WEBSITE_ACCOUNTS.length; i++) {
-      const account = WEBSITE_ACCOUNTS[i];
-      let convId;
-
-      if (!botId) {
-        // Couldn't parse the format at all — just pass through as-is.
-        convId = conversationId;
-      } else if (account.uid === originalUid) {
-        // This IS the account the conversationId was originally built for —
-        // use it exactly as given.
-        convId = conversationId;
-      } else {
-        // Different account: reuse a previously-established conversationId
-        // for this (account, bot) pair if we have one, otherwise mint a
-        // brand new one (new timestamp) — this account has never talked to
-        // this bot under this ID before, so a borrowed timestamp won't exist.
-        const cacheKey = `${i}:${botId}`;
-        convId = accountBotConversations.get(cacheKey) || `${account.uid}__bot_${botId}_${Date.now()}`;
-        accountBotConversations.set(cacheKey, convId);
-      }
-
-      console.log(`→ Trying website account [${i}] (${account.uid}) for conversation:`, convId);
-      const result = await sendAs(i, convId);
-      response = result.resp;
-      text = result.bodyText;
-
-      if (response.status !== 429 || !isMessageLimitError(text)) {
-        usedAccountIndex = i;
-        finalConversationId = convId;
-        break; // success, or a non-rate-limit failure — stop trying more accounts
-      }
-      console.log(`↻ Account [${i}] (${account.uid}) hit its daily limit, trying next account...`);
-    }
-
-    console.log("← Website API status:", response.status);
-    console.log("← Website API body:", text.substring(0, 500));
-
-    if (response.status === 429) {
-      return res.status(429).json({
-        error: "all_accounts_rate_limited",
-        detail: `All ${WEBSITE_ACCOUNTS.length} configured account(s) have hit their daily message limit.`,
+    );
+    const text = await response.text();
+    console.log(`[/personas POST] upstream status: ${response.status}`);
+    if (!response.ok) {
+      console.error(`[/personas POST] upstream failed with status ${response.status}, body: ${text.substring(0, 500)}`);
+      return res.status(response.status).json({
+        error: `Upstream persona service failed with status ${response.status}`,
+        upstreamBody: text.substring(0, 500),
       });
     }
-
     try {
-      const parsed = JSON.parse(text);
-      if (finalConversationId !== conversationId) {
-        parsed._newConversationId = finalConversationId;
+      res.status(response.status).json(JSON.parse(text));
+    } catch (parseErr) {
+      console.error(`[/personas POST] upstream returned non-JSON: ${text.substring(0, 500)}`);
+      res.status(502).json({ error: "Upstream persona service returned non-JSON response" });
+    }
+  } catch (err) {
+    console.error("[/personas POST] error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── PATCH /personas/default — set the active persona ───────────────────────────
+app.patch("/personas/default", async (req, res) => {
+  try {
+    const { default_persona_id } = req.body;
+    if (!default_persona_id) {
+      return res.status(400).json({ error: "default_persona_id is required" });
+    }
+    const token = await getFreshToken();
+    console.log("[/personas/default PATCH] setting default:", default_persona_id);
+    const response = await fetch(
+      "https://chai-user-service-65663778556.us-central1.run.app/personas/default",
+      {
+        method: "PATCH",
+        headers: {
+          "Authorization": `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ default_persona_id }),
       }
-      parsed._accountIndex = usedAccountIndex; // useful for debugging/logging
-      res.status(response.status).json(parsed);
-    } catch {
-      res.status(response.status).send(text);
+    );
+    const text = await response.text();
+    console.log(`[/personas/default PATCH] upstream status: ${response.status}`);
+    if (!response.ok) {
+      console.error(`[/personas/default PATCH] upstream failed with status ${response.status}, body: ${text.substring(0, 500)}`);
+      return res.status(response.status).json({
+        error: `Upstream persona service failed with status ${response.status}`,
+        upstreamBody: text.substring(0, 500),
+      });
+    }
+    try {
+      res.status(response.status).json(JSON.parse(text));
+    } catch (parseErr) {
+      console.error(`[/personas/default PATCH] upstream returned non-JSON: ${text.substring(0, 500)}`);
+      res.status(502).json({ error: "Upstream persona service returned non-JSON response" });
     }
   } catch (err) {
-    console.error("Chat error:", err.message);
+    console.error("[/personas/default PATCH] error:", err.message);
     res.status(500).json({ error: err.message });
   }
 });
 
-// ── GET /token/mobile and /token/website — debug helpers ─────────────────────
-app.get("/token/mobile", async (req, res) => {
-  try {
-    const token = await getMobileToken();
-    res.json({ token, uid: MOBILE_UID });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get("/token/website/:index", async (req, res) => {
-  try {
-    const i = parseInt(req.params.index, 10);
-    if (!WEBSITE_ACCOUNTS[i]) {
-      return res.status(404).json({ error: `No website account at index ${i}. Have ${WEBSITE_ACCOUNTS.length} account(s).` });
-    }
-    const token = await websiteTokenGetters[i]();
-    res.json({ token, uid: WEBSITE_ACCOUNTS[i].uid });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ── Health check ────────────────────────────────────────────────────────────
-app.get("/", (req, res) => res.json({
-  status: "Chai Proxy running (true hybrid, multi-account chat fallback)",
-  note: "Feed/search/botinfo use MOBILE credentials. Chat rotates across WEBSITE_ACCOUNTS on daily rate limit.",
-  configured: {
-    mobile: { api_key: !!MOBILE_API_KEY, uid: !!MOBILE_UID, refresh_token: !!MOBILE_REFRESH_TOKEN },
-    website: { api_key: !!WEBSITE_API_KEY, accounts: WEBSITE_ACCOUNTS.length, uids: WEBSITE_ACCOUNTS.map(a => a.uid) },
-  },
-}));
+// ── Health check ──────────────────────────────────────────────────────────────
+app.get("/", (req, res) => res.json({ status: "Chai Proxy running (mobile API)" }));
 
 if (require.main === module) {
   app.listen(3001, () => console.log("Chai Proxy running on http://localhost:3001"));
