@@ -272,21 +272,6 @@ async function initializeConversation(accountIndex, botId, convId, userMessage) 
   const token = await websiteTokenGetters[accountIndex]();
   const { gotScraping } = await import("got-scraping"); // ESM-only package
 
-  // Cheap diagnostic probe — not expected to succeed, kept for visibility.
-  try {
-    const getResp = await gotScraping.get(`${WEBSITE_API_BASE}/conversations/${convId}`, {
-      headers: initHeaders(token, convId),
-      ...GOT_OPTS,
-    });
-    console.log(`🔎 init GET /conversations/${convId} -> ${getResp.statusCode} | body: ${getResp.body}`);
-    if (getResp.statusCode >= 200 && getResp.statusCode < 300) {
-      console.log(`✨ Conversation ${convId} confirmed via GET for account ${account.uid}`);
-      return;
-    }
-  } catch (e) {
-    console.error(`❌ init GET threw for ${convId}: ${e.message}`);
-  }
-
   // Try website-side persona data first (real name + greeting), falling
   // back to the mobile bot-service, falling back to placeholders.
   let persona = null;
@@ -328,12 +313,31 @@ async function initializeConversation(accountIndex, botId, convId, userMessage) 
     });
     console.log(`🔎 init POST /conversations -> ${postResp.statusCode} | body: ${postResp.body}`);
     if (postResp.statusCode >= 200 && postResp.statusCode < 300) {
-      console.log(`✨ Conversation ${convId} created via POST for account ${account.uid}`);
+      // IMPORTANT: Chai's backend does NOT honor the conversation_id we send
+      // — it mints its own (different format: single underscore, no "bot_"
+      // segment, server-side timestamp) and returns it here. Every /send
+      // afterward MUST use this real id, not the one we constructed, or it
+      // 500s against a conversation that doesn't actually exist server-side.
+      let realId = null;
+      try {
+        realId = JSON.parse(postResp.body)?.conversation_id || null;
+      } catch {
+        // fall through with realId = null
+      }
+      if (realId && realId !== convId) {
+        console.log(`↪️  Server assigned a different conversation_id: ${realId} (requested: ${convId})`);
+      } else if (!realId) {
+        console.error(`⚠️  201 response had no parseable conversation_id — /send will likely still fail.`);
+      }
+      console.log(`✨ Conversation created via POST for account ${account.uid}`);
+      return realId;
     } else {
       console.error(`❌ POST /conversations still not 2xx for ${convId} (status ${postResp.statusCode}). See body above for remaining missing/invalid fields.`);
+      return null;
     }
   } catch (e) {
     console.error(`❌ init POST threw for ${convId}: ${e.message}`);
+    return null;
   }
 }
 
@@ -436,13 +440,17 @@ app.post("/chat", async (req, res) => {
         if (existingId) {
           convId = existingId;
         } else {
-          convId = `${account.uid}__bot_${botId}_${Date.now()}`;
-          accountBotConversations.set(cacheKey, convId);
+          const requestedId = `${account.uid}__bot_${botId}_${Date.now()}`;
 
-          // New conversation for this (account, bot) pair — open it
-          // server-side before we try to send into it.
+          // New conversation for this (account, bot) pair — create it
+          // server-side before we try to send into it. Chai's backend does
+          // NOT honor the id we request; it returns its own real id, which
+          // is what MUST be used for /send and cached for reuse.
           console.log(`🆕 New conversation detected. Initializing...`);
-          await initializeConversation(i, botId, convId, message);
+          const realId = await initializeConversation(i, botId, requestedId, message);
+
+          convId = realId || requestedId; // fall back to requested id if creation failed — will surface as a real error via /send rather than silently
+          accountBotConversations.set(cacheKey, convId);
         }
       }
 
