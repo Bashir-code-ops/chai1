@@ -152,27 +152,31 @@ app.get("/search", async (req, res) => {
   }
 });
 
+// Shared bot-info fetch, used by both the /botinfo route and the
+// conversation-init logic below (which needs bot_name/bot_uid to satisfy
+// the website API's create-conversation validation).
+async function fetchBotInfo(botId) {
+  const token = await getMobileToken();
+  const response = await fetch(
+    `https://bot-service-us1-65663778556.us-central1.run.app/v2/chatbots/${botId}`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(`bot-service returned ${response.status}: ${text.substring(0, 300)}`);
+  }
+  return JSON.parse(text);
+}
+
 // ── GET /botinfo/:botId (mobile API) ──────────────────────────────────────────
 app.get("/botinfo/:botId", async (req, res) => {
   try {
-    const token = await getMobileToken();
-    const response = await fetch(
-      `https://bot-service-us1-65663778556.us-central1.run.app/v2/chatbots/${req.params.botId}`,
-      { headers: { Authorization: `Bearer ${token}` } }
-    );
-    const text = await response.text();
-    console.log(`[/botinfo] botId=${req.params.botId} upstream status: ${response.status}`);
-    if (!response.ok) {
-      return res.status(response.status).json({ error: `Upstream bot service failed with status ${response.status}`, upstreamBody: text.substring(0, 500) });
-    }
-    try {
-      res.status(response.status).json(JSON.parse(text));
-    } catch {
-      res.status(502).json({ error: "Upstream bot service returned non-JSON response" });
-    }
+    const info = await fetchBotInfo(req.params.botId);
+    console.log(`[/botinfo] botId=${req.params.botId} upstream ok`);
+    res.json(info);
   } catch (err) {
     console.error("[/botinfo] error:", err.message);
-    res.status(500).json({ error: err.message });
+    res.status(502).json({ error: err.message });
   }
 });
 
@@ -238,31 +242,31 @@ const GOT_OPTS = {
   },
 };
 
-// Diagnostic + best-effort "open" of a brand-new conversation before the
-// first /send. We don't actually know Chai's real create-conversation
-// contract, so this logs enough to tell us what's happening instead of
-// silently swallowing the result like before:
-//   1. GET /conversations/:id  — read-only probe, in case it exists already
-//      or GET alone is enough to lazily create it server-side.
-//   2. If that isn't 2xx, try POST /conversations (with botId + a
-//      conversation id in the body) as a fallback create call — this is a
-//      guess at the shape and may itself 404/400; the point is we now SEE
-//      that instead of guessing blind.
-// Neither path throws — /send always runs afterward so real failures
-// surface through the normal account-rotation logic, not here.
+// Best-effort "open"/create of a brand-new conversation before the first
+// /send. The last test run told us two real things:
+//   1. GET /conversations/:id 500s for a not-yet-existing conversation —
+//      that's coming straight from Chai's backend (server: Google Frontend),
+//      so GET alone doesn't create anything; it's read-only, kept here only
+//      as a cheap diagnostic probe.
+//   2. POST /conversations expects a JSON body and validates it — Chai's API
+//      told us directly (via a 422) that bot_uid and bot_name are required,
+//      and there may be more required fields we haven't seen yet because the
+//      error was truncated before. This version logs the FULL body (no
+//      truncation) so any remaining missing fields are visible next run.
+// We now pull bot_name (and a best-guess bot_uid) from the mobile /botinfo
+// lookup we already have credentials for, instead of guessing blind.
 async function initializeConversation(accountIndex, botId, convId) {
   const account = WEBSITE_ACCOUNTS[accountIndex];
   const token = await websiteTokenGetters[accountIndex]();
   const { gotScraping } = await import("got-scraping"); // ESM-only package
 
+  // Cheap diagnostic probe — not expected to succeed, kept for visibility.
   try {
     const getResp = await gotScraping.get(`${WEBSITE_API_BASE}/conversations/${convId}`, {
       headers: initHeaders(token, convId),
       ...GOT_OPTS,
     });
-    console.log(
-      `🔎 init GET /conversations/${convId} -> ${getResp.statusCode} | body: ${String(getResp.body).substring(0, 300)}`
-    );
+    console.log(`🔎 init GET /conversations/${convId} -> ${getResp.statusCode} | body: ${getResp.body}`);
     if (getResp.statusCode >= 200 && getResp.statusCode < 300) {
       console.log(`✨ Conversation ${convId} confirmed via GET for account ${account.uid}`);
       return;
@@ -271,23 +275,39 @@ async function initializeConversation(accountIndex, botId, convId) {
     console.error(`❌ init GET threw for ${convId}: ${e.message}`);
   }
 
-  // GET didn't confirm the conversation exists — try a POST create as a
-  // fallback. This shape (bot_id + conversation id in body) is a guess;
-  // the logged status/body below will tell us if it's wrong so it can be
-  // corrected instead of debugged blind via repeated 500s on /send.
+  // Pull real bot info so we can populate bot_name/bot_uid instead of
+  // guessing. Log the raw shape (once) so we can see what field names are
+  // actually available if 'uid'/'name' aren't it.
+  let botInfo = null;
+  try {
+    botInfo = await fetchBotInfo(botId);
+    console.log(`🔎 botInfo for ${botId}:`, JSON.stringify(botInfo).substring(0, 800));
+  } catch (e) {
+    console.error(`❌ fetchBotInfo failed for ${botId}: ${e.message}`);
+  }
+
+  const botName = botInfo?.name || botInfo?.botName || botInfo?.displayName || "Bot";
+  // We don't yet know for certain what "bot_uid" refers to (the bot's own id
+  // again under a different key, or its creator's uid) — try the bot's own
+  // uid/creator field if present, falling back to botId itself.
+  const botUid = botInfo?.uid || botInfo?.creatorUid || botInfo?.creator_uid || botId;
+
   try {
     const postResp = await gotScraping.post(`${WEBSITE_API_BASE}/conversations`, {
       headers: { ...initHeaders(token, convId), "Content-Type": "application/json" },
-      json: { conversation_id: convId, bot_id: botId },
+      json: {
+        conversation_id: convId,
+        bot_id: botId,
+        bot_uid: botUid,
+        bot_name: botName,
+      },
       ...GOT_OPTS,
     });
-    console.log(
-      `🔎 init POST /conversations -> ${postResp.statusCode} | body: ${String(postResp.body).substring(0, 300)}`
-    );
+    console.log(`🔎 init POST /conversations -> ${postResp.statusCode} | body: ${postResp.body}`);
     if (postResp.statusCode >= 200 && postResp.statusCode < 300) {
       console.log(`✨ Conversation ${convId} created via POST for account ${account.uid}`);
     } else {
-      console.error(`❌ Neither GET nor POST confirmed/created conversation ${convId}. /send will likely 500.`);
+      console.error(`❌ POST /conversations still not 2xx for ${convId} (status ${postResp.statusCode}). See body above for remaining missing/invalid fields.`);
     }
   } catch (e) {
     console.error(`❌ init POST threw for ${convId}: ${e.message}`);
