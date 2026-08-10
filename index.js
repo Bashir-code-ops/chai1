@@ -206,6 +206,47 @@ app.get("/image", async (req, res) => {
 // but that's fine — a fresh conversationId gets created again automatically).
 const accountBotConversations = new Map(); // key: "accountIndex:botId" -> conversationId
 
+// Hits the endpoint that "opens" a brand-new conversation on the website side
+// before the first /send — mirrors what a real browser does when a chat
+// window is first opened, so the conversation exists server-side before we
+// try to post a message into it.
+async function initializeConversation(accountIndex, botId, convId) {
+  const account = WEBSITE_ACCOUNTS[accountIndex];
+  const token = await websiteTokenGetters[accountIndex]();
+
+  try {
+    const { gotScraping } = await import("got-scraping"); // ESM-only package
+    await gotScraping.get(`${WEBSITE_API_BASE}/conversations/${convId}`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Origin: "https://www.chai-ai.com",
+        Referer: `https://www.chai-ai.com/chat/${convId}`,
+        Accept: "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "sec-ch-ua": '"Not=A?Brand";v="99", "Microsoft Edge";v="151", "Chromium";v="151"',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"Windows"',
+        "Sec-Fetch-Dest": "empty",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Site": "same-origin",
+      },
+      responseType: "text",
+      throwHttpErrors: false,
+      headerGeneratorOptions: {
+        browsers: [{ name: "chrome", minVersion: 120 }],
+        devices: ["desktop"],
+        operatingSystems: ["windows"],
+      },
+    });
+    console.log(`✨ Conversation ${convId} initialized for account ${account.uid}`);
+  } catch (e) {
+    console.error(`❌ Failed to initialize conversation ${convId}: ${e.message}`);
+    // If this fails, the subsequent /send will almost certainly 500 — we
+    // still let the caller proceed to sendAs() so that failure surfaces
+    // through the normal retry/rotation path instead of silently here.
+  }
+}
+
 // ── POST /chat (WEBSITE API, rotates across multiple accounts on 429) ────────
 app.post("/chat", async (req, res) => {
   try {
@@ -289,13 +330,20 @@ app.post("/chat", async (req, res) => {
         // use it exactly as given.
         convId = conversationId;
       } else {
-        // Different account: reuse a previously-established conversationId
-        // for this (account, bot) pair if we have one, otherwise mint a
-        // brand new one (new timestamp) — this account has never talked to
-        // this bot under this ID before, so a borrowed timestamp won't exist.
         const cacheKey = `${i}:${botId}`;
-        convId = accountBotConversations.get(cacheKey) || `${account.uid}__bot_${botId}_${Date.now()}`;
-        accountBotConversations.set(cacheKey, convId);
+        const existingId = accountBotConversations.get(cacheKey);
+
+        if (existingId) {
+          convId = existingId;
+        } else {
+          convId = `${account.uid}__bot_${botId}_${Date.now()}`;
+          accountBotConversations.set(cacheKey, convId);
+
+          // New conversation for this (account, bot) pair — open it
+          // server-side before we try to send into it.
+          console.log(`🆕 New conversation detected. Initializing...`);
+          await initializeConversation(i, botId, convId);
+        }
       }
 
       console.log(`→ Trying website account [${i}] (${account.uid}) for conversation:`, convId);
