@@ -1,6 +1,5 @@
 const express = require("express");
 const cors = require("cors");
-const { gotScraping } = require("got-scraping");
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -232,6 +231,7 @@ app.post("/chat", async (req, res) => {
       const account = WEBSITE_ACCOUNTS[accountIndex];
       const token = await websiteTokenGetters[accountIndex]();
       try {
+        const { gotScraping } = await import("got-scraping"); // ESM-only package
         const gotResp = await gotScraping.post(`${WEBSITE_API_BASE}/conversations/${convId}/send`, {
           headers: {
             "Content-Type": "application/json",
