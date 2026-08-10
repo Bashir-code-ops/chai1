@@ -251,11 +251,15 @@ const GOT_OPTS = {
 async function fetchPersonaPrefill(token, botId, convId) {
   const { gotScraping } = await import("got-scraping");
   const resp = await gotScraping.get(`${WEBSITE_API_BASE}/persona/prefill`, {
-    searchParams: { bot_id: botId },
+    // The endpoint's own 422 told us bot_uid is required alongside bot_id —
+    // we don't know the bot's real uid distinct from its id, so try botId
+    // itself first (same guess that worked for the /conversations create
+    // body's bot_uid field).
+    searchParams: { bot_id: botId, bot_uid: botId },
     headers: initHeaders(token, convId),
     ...GOT_OPTS,
   });
-  console.log(`🔎 persona/prefill?bot_id=${botId} -> ${resp.statusCode} | body: ${resp.body}`);
+  console.log(`🔎 persona/prefill?bot_id=${botId}&bot_uid=${botId} -> ${resp.statusCode} | body: ${resp.body}`);
   if (resp.statusCode < 200 || resp.statusCode >= 300) {
     throw new Error(`persona/prefill returned ${resp.statusCode}`);
   }
@@ -272,23 +276,25 @@ async function initializeConversation(accountIndex, botId, convId, userMessage) 
   const token = await websiteTokenGetters[accountIndex]();
   const { gotScraping } = await import("got-scraping"); // ESM-only package
 
-  // Try website-side persona data first (real name + greeting), falling
-  // back to the mobile bot-service, falling back to placeholders.
-  let persona = null;
-  try {
-    persona = await fetchPersonaPrefill(token, botId, convId);
-  } catch (e) {
-    console.error(`❌ fetchPersonaPrefill failed for ${botId}: ${e.message}`);
+  // Look up bot metadata from both sources concurrently (not sequentially)
+  // to cut added latency roughly in half — we still want both as fallbacks
+  // since persona/prefill 422s and mobile botInfo 404s independently
+  // depending on the bot, and we don't know in advance which will work.
+  const [personaResult, botInfoResult] = await Promise.allSettled([
+    fetchPersonaPrefill(token, botId, convId),
+    fetchBotInfo(botId),
+  ]);
+
+  const persona = personaResult.status === "fulfilled" ? personaResult.value : null;
+  if (personaResult.status === "rejected") {
+    console.error(`❌ fetchPersonaPrefill failed for ${botId}: ${personaResult.reason.message}`);
   }
 
-  let botInfo = null;
-  if (!persona) {
-    try {
-      botInfo = await fetchBotInfo(botId);
-      console.log(`🔎 botInfo for ${botId}:`, JSON.stringify(botInfo).substring(0, 800));
-    } catch (e) {
-      console.error(`❌ fetchBotInfo failed for ${botId}: ${e.message}`);
-    }
+  const botInfo = botInfoResult.status === "fulfilled" ? botInfoResult.value : null;
+  if (botInfoResult.status === "rejected") {
+    console.error(`❌ fetchBotInfo failed for ${botId}: ${botInfoResult.reason.message}`);
+  } else {
+    console.log(`🔎 botInfo for ${botId}:`, JSON.stringify(botInfo).substring(0, 800));
   }
 
   const botName = persona?.name || persona?.botName || botInfo?.name || botInfo?.botName || botInfo?.displayName || "Bot";
