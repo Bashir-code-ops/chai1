@@ -1,5 +1,6 @@
 const express = require("express");
 const cors = require("cors");
+const { gotScraping } = require("got-scraping");
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -230,27 +231,39 @@ app.post("/chat", async (req, res) => {
     async function sendAs(accountIndex, convId) {
       const account = WEBSITE_ACCOUNTS[accountIndex];
       const token = await websiteTokenGetters[accountIndex]();
-      const resp = await fetch(`${WEBSITE_API_BASE}/conversations/${convId}/send`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-          Origin: "https://www.chai-ai.com",
-          Referer: `https://www.chai-ai.com/chat/${convId}`,
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36 Edg/151.0.0.0",
-          Accept: "application/json, text/plain, */*",
-          "Accept-Language": "en-US,en;q=0.9",
-          "sec-ch-ua": '"Not=A?Brand";v="99", "Microsoft Edge";v="151", "Chromium";v="151"',
-          "sec-ch-ua-mobile": "?0",
-          "sec-ch-ua-platform": '"Windows"',
-          "Sec-Fetch-Dest": "empty",
-          "Sec-Fetch-Mode": "cors",
-          "Sec-Fetch-Site": "same-origin",
-        },
-        body: JSON.stringify({ content: message || "" }),
-      });
-      const bodyText = await resp.text();
-      return { resp, bodyText };
+      try {
+        const gotResp = await gotScraping.post(`${WEBSITE_API_BASE}/conversations/${convId}/send`, {
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+            Origin: "https://www.chai-ai.com",
+            Referer: `https://www.chai-ai.com/chat/${convId}`,
+            Accept: "application/json, text/plain, */*",
+            "Accept-Language": "en-US,en;q=0.9",
+            "sec-ch-ua": '"Not=A?Brand";v="99", "Microsoft Edge";v="151", "Chromium";v="151"',
+            "sec-ch-ua-mobile": "?0",
+            "sec-ch-ua-platform": '"Windows"',
+            "Sec-Fetch-Dest": "empty",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Site": "same-origin",
+          },
+          json: { content: message || "" },
+          responseType: "text",
+          throwHttpErrors: false, // we handle non-2xx ourselves below
+          headerGeneratorOptions: {
+            browsers: [{ name: "chrome", minVersion: 120 }],
+            devices: ["desktop"],
+            operatingSystems: ["windows"],
+          },
+        });
+        return {
+          resp: { status: gotResp.statusCode, ok: gotResp.statusCode >= 200 && gotResp.statusCode < 300 },
+          bodyText: gotResp.body,
+        };
+      } catch (gotErr) {
+        console.error(`got-scraping request failed for account [${accountIndex}]:`, gotErr.message);
+        return { resp: { status: 500, ok: false }, bodyText: `got-scraping error: ${gotErr.message}` };
+      }
     }
 
     function isMessageLimitError(bodyText) {
