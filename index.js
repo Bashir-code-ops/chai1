@@ -242,20 +242,32 @@ const GOT_OPTS = {
   },
 };
 
+// Website-side persona lookup — mobile /botinfo 404'd for this bot id in
+// testing, so bot metadata (real name, greeting/first_message) likely needs
+// to come from the website's own API instead of the mobile bot-service.
+// Endpoint path is a guess based on prior reconnaissance of chai-ai.com's
+// API (persona/prefill was previously found to return structured per-bot
+// data); logged in full so the real shape/path can be corrected if wrong.
+async function fetchPersonaPrefill(token, botId, convId) {
+  const { gotScraping } = await import("got-scraping");
+  const resp = await gotScraping.get(`${WEBSITE_API_BASE}/persona/prefill`, {
+    searchParams: { bot_id: botId },
+    headers: initHeaders(token, convId),
+    ...GOT_OPTS,
+  });
+  console.log(`🔎 persona/prefill?bot_id=${botId} -> ${resp.statusCode} | body: ${resp.body}`);
+  if (resp.statusCode < 200 || resp.statusCode >= 300) {
+    throw new Error(`persona/prefill returned ${resp.statusCode}`);
+  }
+  return JSON.parse(resp.body);
+}
+
 // Best-effort "open"/create of a brand-new conversation before the first
-// /send. The last test run told us two real things:
-//   1. GET /conversations/:id 500s for a not-yet-existing conversation —
-//      that's coming straight from Chai's backend (server: Google Frontend),
-//      so GET alone doesn't create anything; it's read-only, kept here only
-//      as a cheap diagnostic probe.
-//   2. POST /conversations expects a JSON body and validates it — Chai's API
-//      told us directly (via a 422) that bot_uid and bot_name are required,
-//      and there may be more required fields we haven't seen yet because the
-//      error was truncated before. This version logs the FULL body (no
-//      truncation) so any remaining missing fields are visible next run.
-// We now pull bot_name (and a best-guess bot_uid) from the mobile /botinfo
-// lookup we already have credentials for, instead of guessing blind.
-async function initializeConversation(accountIndex, botId, convId) {
+// /send. Confirmed so far via live 422 responses from Chai's own validator:
+// required fields are conversation_id, bot_id, bot_uid, bot_name, and
+// first_message. bot_uid/bot_name are now accepted; first_message is the
+// remaining gap this version fills in.
+async function initializeConversation(accountIndex, botId, convId, userMessage) {
   const account = WEBSITE_ACCOUNTS[accountIndex];
   const token = await websiteTokenGetters[accountIndex]();
   const { gotScraping } = await import("got-scraping"); // ESM-only package
@@ -275,22 +287,32 @@ async function initializeConversation(accountIndex, botId, convId) {
     console.error(`❌ init GET threw for ${convId}: ${e.message}`);
   }
 
-  // Pull real bot info so we can populate bot_name/bot_uid instead of
-  // guessing. Log the raw shape (once) so we can see what field names are
-  // actually available if 'uid'/'name' aren't it.
-  let botInfo = null;
+  // Try website-side persona data first (real name + greeting), falling
+  // back to the mobile bot-service, falling back to placeholders.
+  let persona = null;
   try {
-    botInfo = await fetchBotInfo(botId);
-    console.log(`🔎 botInfo for ${botId}:`, JSON.stringify(botInfo).substring(0, 800));
+    persona = await fetchPersonaPrefill(token, botId, convId);
   } catch (e) {
-    console.error(`❌ fetchBotInfo failed for ${botId}: ${e.message}`);
+    console.error(`❌ fetchPersonaPrefill failed for ${botId}: ${e.message}`);
   }
 
-  const botName = botInfo?.name || botInfo?.botName || botInfo?.displayName || "Bot";
-  // We don't yet know for certain what "bot_uid" refers to (the bot's own id
-  // again under a different key, or its creator's uid) — try the bot's own
-  // uid/creator field if present, falling back to botId itself.
-  const botUid = botInfo?.uid || botInfo?.creatorUid || botInfo?.creator_uid || botId;
+  let botInfo = null;
+  if (!persona) {
+    try {
+      botInfo = await fetchBotInfo(botId);
+      console.log(`🔎 botInfo for ${botId}:`, JSON.stringify(botInfo).substring(0, 800));
+    } catch (e) {
+      console.error(`❌ fetchBotInfo failed for ${botId}: ${e.message}`);
+    }
+  }
+
+  const botName = persona?.name || persona?.botName || botInfo?.name || botInfo?.botName || botInfo?.displayName || "Bot";
+  const botUid = persona?.uid || persona?.creatorUid || botInfo?.uid || botInfo?.creatorUid || botInfo?.creator_uid || botId;
+  // Prefer the bot's actual greeting/opening line if we found one; otherwise
+  // fall back to the real message the user is about to send, since an empty
+  // string is the one thing we already know fails validation.
+  const firstMessage =
+    persona?.first_message || persona?.firstMessage || persona?.greeting || userMessage || "Hello!";
 
   try {
     const postResp = await gotScraping.post(`${WEBSITE_API_BASE}/conversations`, {
@@ -300,6 +322,7 @@ async function initializeConversation(accountIndex, botId, convId) {
         bot_id: botId,
         bot_uid: botUid,
         bot_name: botName,
+        first_message: firstMessage,
       },
       ...GOT_OPTS,
     });
@@ -419,7 +442,7 @@ app.post("/chat", async (req, res) => {
           // New conversation for this (account, bot) pair — open it
           // server-side before we try to send into it.
           console.log(`🆕 New conversation detected. Initializing...`);
-          await initializeConversation(i, botId, convId);
+          await initializeConversation(i, botId, convId, message);
         }
       }
 
