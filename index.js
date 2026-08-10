@@ -69,9 +69,11 @@ function createTokenGetter(label, apiKey, refreshToken) {
         }
       );
       const data = await res.json();
-      console.log(`🔄 ${label} token refresh response:`, JSON.stringify(data));
+      // NEVER log `data` directly — it contains a live refresh_token and
+      // id_token in plaintext. Log only non-sensitive shape info.
       if (!data.id_token) {
-        throw new Error(`${label} token refresh failed: ` + JSON.stringify(data));
+        console.error(`🔄 ${label} token refresh response had no id_token. Keys present:`, Object.keys(data));
+        throw new Error(`${label} token refresh failed (no id_token returned)`);
       }
 
       cachedToken = data.id_token;
@@ -210,40 +212,85 @@ const accountBotConversations = new Map(); // key: "accountIndex:botId" -> conve
 // before the first /send — mirrors what a real browser does when a chat
 // window is first opened, so the conversation exists server-side before we
 // try to post a message into it.
+function initHeaders(token, convId) {
+  return {
+    Authorization: `Bearer ${token}`,
+    Origin: "https://www.chai-ai.com",
+    Referer: `https://www.chai-ai.com/chat/${convId}`,
+    Accept: "application/json, text/plain, */*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "sec-ch-ua": '"Not=A?Brand";v="99", "Microsoft Edge";v="151", "Chromium";v="151"',
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": '"Windows"',
+    "Sec-Fetch-Dest": "empty",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Site": "same-origin",
+  };
+}
+
+const GOT_OPTS = {
+  responseType: "text",
+  throwHttpErrors: false,
+  headerGeneratorOptions: {
+    browsers: [{ name: "chrome", minVersion: 120 }],
+    devices: ["desktop"],
+    operatingSystems: ["windows"],
+  },
+};
+
+// Diagnostic + best-effort "open" of a brand-new conversation before the
+// first /send. We don't actually know Chai's real create-conversation
+// contract, so this logs enough to tell us what's happening instead of
+// silently swallowing the result like before:
+//   1. GET /conversations/:id  — read-only probe, in case it exists already
+//      or GET alone is enough to lazily create it server-side.
+//   2. If that isn't 2xx, try POST /conversations (with botId + a
+//      conversation id in the body) as a fallback create call — this is a
+//      guess at the shape and may itself 404/400; the point is we now SEE
+//      that instead of guessing blind.
+// Neither path throws — /send always runs afterward so real failures
+// surface through the normal account-rotation logic, not here.
 async function initializeConversation(accountIndex, botId, convId) {
   const account = WEBSITE_ACCOUNTS[accountIndex];
   const token = await websiteTokenGetters[accountIndex]();
+  const { gotScraping } = await import("got-scraping"); // ESM-only package
 
   try {
-    const { gotScraping } = await import("got-scraping"); // ESM-only package
-    await gotScraping.get(`${WEBSITE_API_BASE}/conversations/${convId}`, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Origin: "https://www.chai-ai.com",
-        Referer: `https://www.chai-ai.com/chat/${convId}`,
-        Accept: "application/json, text/plain, */*",
-        "Accept-Language": "en-US,en;q=0.9",
-        "sec-ch-ua": '"Not=A?Brand";v="99", "Microsoft Edge";v="151", "Chromium";v="151"',
-        "sec-ch-ua-mobile": "?0",
-        "sec-ch-ua-platform": '"Windows"',
-        "Sec-Fetch-Dest": "empty",
-        "Sec-Fetch-Mode": "cors",
-        "Sec-Fetch-Site": "same-origin",
-      },
-      responseType: "text",
-      throwHttpErrors: false,
-      headerGeneratorOptions: {
-        browsers: [{ name: "chrome", minVersion: 120 }],
-        devices: ["desktop"],
-        operatingSystems: ["windows"],
-      },
+    const getResp = await gotScraping.get(`${WEBSITE_API_BASE}/conversations/${convId}`, {
+      headers: initHeaders(token, convId),
+      ...GOT_OPTS,
     });
-    console.log(`✨ Conversation ${convId} initialized for account ${account.uid}`);
+    console.log(
+      `🔎 init GET /conversations/${convId} -> ${getResp.statusCode} | body: ${String(getResp.body).substring(0, 300)}`
+    );
+    if (getResp.statusCode >= 200 && getResp.statusCode < 300) {
+      console.log(`✨ Conversation ${convId} confirmed via GET for account ${account.uid}`);
+      return;
+    }
   } catch (e) {
-    console.error(`❌ Failed to initialize conversation ${convId}: ${e.message}`);
-    // If this fails, the subsequent /send will almost certainly 500 — we
-    // still let the caller proceed to sendAs() so that failure surfaces
-    // through the normal retry/rotation path instead of silently here.
+    console.error(`❌ init GET threw for ${convId}: ${e.message}`);
+  }
+
+  // GET didn't confirm the conversation exists — try a POST create as a
+  // fallback. This shape (bot_id + conversation id in body) is a guess;
+  // the logged status/body below will tell us if it's wrong so it can be
+  // corrected instead of debugged blind via repeated 500s on /send.
+  try {
+    const postResp = await gotScraping.post(`${WEBSITE_API_BASE}/conversations`, {
+      headers: { ...initHeaders(token, convId), "Content-Type": "application/json" },
+      json: { conversation_id: convId, bot_id: botId },
+      ...GOT_OPTS,
+    });
+    console.log(
+      `🔎 init POST /conversations -> ${postResp.statusCode} | body: ${String(postResp.body).substring(0, 300)}`
+    );
+    if (postResp.statusCode >= 200 && postResp.statusCode < 300) {
+      console.log(`✨ Conversation ${convId} created via POST for account ${account.uid}`);
+    } else {
+      console.error(`❌ Neither GET nor POST confirmed/created conversation ${convId}. /send will likely 500.`);
+    }
+  } catch (e) {
+    console.error(`❌ init POST threw for ${convId}: ${e.message}`);
   }
 }
 
@@ -297,6 +344,16 @@ app.post("/chat", async (req, res) => {
             operatingSystems: ["windows"],
           },
         });
+        if (gotResp.statusCode >= 500) {
+          // Server/gateway header + content-type tell us whether this 500 is
+          // coming from Chai's app (usually has their own server header /
+          // JSON body) or from a fronting proxy/WAF (often generic server
+          // headers + plain-text body like "Internal Server Error").
+          const h = gotResp.headers || {};
+          console.error(
+            `🩺 /send 500 diag [acct ${accountIndex}] server=${h.server || "?"} content-type=${h["content-type"] || "?"} cf-ray=${h["cf-ray"] || "none"} x-vercel-id=${h["x-vercel-id"] || "none"}`
+          );
+        }
         return {
           resp: { status: gotResp.statusCode, ok: gotResp.statusCode >= 200 && gotResp.statusCode < 300 },
           bodyText: gotResp.body,
