@@ -359,14 +359,32 @@ app.post("/chat", async (req, res) => {
     }
 
     // Extracts just the botId out of "<uid>__bot_<botId>_<timestamp>"
-    function getBotId(convId) {
+    // Parses BOTH id formats we now see in the wild:
+    //   client format: <uid>__bot_<botId>_<timestamp>   (what this proxy used to generate)
+    //   server format: <uid>_<botId>_<timestamp>        (what Chai's backend actually assigns
+    //                                                     and what the app now correctly echoes
+    //                                                     back on follow-up messages)
+    // botId is always a UUID, which is what makes the server format unambiguous to parse
+    // despite using single underscores throughout.
+    function parseConvId(convId) {
       const idx = convId.indexOf("__bot_");
-      if (idx === -1) return null;
-      const rest = convId.substring(idx + "__bot_".length); // "<botId>_<timestamp>"
-      return rest.replace(/_\d+$/, "");
+      if (idx !== -1) {
+        const uid = convId.substring(0, idx);
+        const rest = convId.substring(idx + "__bot_".length); // "<botId>_<timestamp>"
+        const botId = rest.replace(/_\d+$/, "");
+        return { uid, botId };
+      }
+      const serverMatch = convId.match(
+        /^(.+?)_([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})_(\d+)$/
+      );
+      if (serverMatch) {
+        return { uid: serverMatch[1], botId: serverMatch[2] };
+      }
+      return null;
     }
-    const botId = getBotId(conversationId);
-    const originalUid = botId ? conversationId.substring(0, conversationId.indexOf("__bot_")) : null;
+    const parsedConvId = parseConvId(conversationId);
+    const botId = parsedConvId?.botId || null;
+    const originalUid = parsedConvId?.uid || null;
 
     async function sendAs(accountIndex, convId) {
       const account = WEBSITE_ACCOUNTS[accountIndex];
@@ -530,6 +548,10 @@ app.get("/token/website/:index", async (req, res) => {
 // ── Health check ────────────────────────────────────────────────────────────
 app.get("/", (req, res) => res.json({
   status: "Chai Proxy running (true hybrid, multi-account chat fallback)",
+  // Bump this string every time you push a meaningful fix — lets you confirm
+  // from curl that Vercel actually deployed the new code, without needing
+  // to check the dashboard or guess from behavior.
+  version: "2026-08-11-parseConvId-dual-format-fix",
   note: "Feed/search/botinfo use MOBILE credentials. Chat rotates across WEBSITE_ACCOUNTS on daily rate limit.",
   configured: {
     mobile: { api_key: !!MOBILE_API_KEY, uid: !!MOBILE_UID, refresh_token: !!MOBILE_REFRESH_TOKEN },
