@@ -394,7 +394,15 @@ app.post("/chat", async (req, res) => {
       if (!botId) {
         convId = conversationId;
       } else if (account.uid === originalUid) {
-        convId = conversationId;
+        const cacheKey = `${i}:${botId}`;
+        if (accountBotConversations.has(cacheKey)) {
+          convId = conversationId;
+        } else {
+          console.log(`🆕 Original account, but new conversation. Initializing...`);
+          const realId = await initializeConversation(i, botId, conversationId, message);
+          convId = realId || conversationId;
+          accountBotConversations.set(cacheKey, convId);
+        }
       } else {
         const cacheKey = `${i}:${botId}`;
         const existingId = accountBotConversations.get(cacheKey);
