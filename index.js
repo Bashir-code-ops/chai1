@@ -1,9 +1,10 @@
+
+
 const express = require("express");
 const cors = require("cors");
 const app = express();
 app.use(cors());
 app.use(express.json());
-
 // ── TRUE Hybrid: two SEPARATE Firebase projects/accounts ─────────────────────
 // The mobile app and the website are different Firebase projects, even for the
 // same Chai account — a token minted in one project is NOT valid in the other.
@@ -11,12 +12,10 @@ app.use(express.json());
 //
 //   MOBILE credentials → feed / search / botinfo / image (unrestricted)
 //   WEBSITE credentials → chat only (avoids bot-responder's regional block)
-
 // ── Mobile credentials ─────────────────────────────────────────────────────
 const MOBILE_API_KEY      = process.env.MOBILE_FIREBASE_API_KEY || "";
 const MOBILE_UID          = process.env.MOBILE_CHAI_UID || "";
 const MOBILE_REFRESH_TOKEN = process.env.MOBILE_REFRESH_TOKEN || "";
-
 // ── Website credentials — MULTIPLE accounts for automatic fallback ──────────
 // Each website account has its own daily message cap (~4/day observed). When
 // one account gets rate-limited, /chat automatically tries the next one.
@@ -33,9 +32,7 @@ try {
 } catch (e) {
   console.error("❌ Failed to parse WEBSITE_ACCOUNTS env var as JSON:", e.message);
 }
-
 const WEBSITE_API_BASE = "https://www.chai-ai.com/api";
-
 for (const [name, val] of Object.entries({
   MOBILE_API_KEY, MOBILE_UID, MOBILE_REFRESH_TOKEN, WEBSITE_API_KEY,
 })) {
@@ -46,18 +43,15 @@ if (WEBSITE_ACCOUNTS.length === 0) {
 } else {
   console.log(`ℹ️  Loaded ${WEBSITE_ACCOUNTS.length} website account(s) for /chat fallback`);
 }
-
 // ── Generic token-cache factory — one instance per credential set ────────────
 function createTokenGetter(label, apiKey, refreshToken) {
   let cachedToken = null;
   let tokenExpiry = 0;
-
   return async function getFreshToken() {
     if (cachedToken && Date.now() < tokenExpiry) return cachedToken;
     if (!apiKey || !refreshToken) {
       throw new Error(`${label}: API key / refresh token not configured on the proxy.`);
     }
-
     console.log(`🔄 Refreshing ${label} token...`);
     try {
       const res = await fetch(
@@ -75,7 +69,6 @@ function createTokenGetter(label, apiKey, refreshToken) {
         console.error(`🔄 ${label} token refresh response had no id_token. Keys present:`, Object.keys(data));
         throw new Error(`${label} token refresh failed (no id_token returned)`);
       }
-
       cachedToken = data.id_token;
       tokenExpiry = Date.now() + 3500 * 1000; // 58 minutes
       console.log(`✅ ${label} Firebase token refreshed`);
@@ -86,15 +79,12 @@ function createTokenGetter(label, apiKey, refreshToken) {
     }
   };
 }
-
 const getMobileToken = createTokenGetter("MOBILE", MOBILE_API_KEY, MOBILE_REFRESH_TOKEN);
-
 // One independent token cache PER website account, so we're not re-minting
 // tokens for an account we're not currently using.
 const websiteTokenGetters = WEBSITE_ACCOUNTS.map((acct, i) =>
   createTokenGetter(`WEBSITE[${i}]:${acct.uid}`, WEBSITE_API_KEY, acct.refreshToken)
 );
-
 // ── GET /feed (mobile API) ──────────────────────────────────────────────────
 app.get("/feed", async (req, res) => {
   try {
@@ -122,7 +112,6 @@ app.get("/feed", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-
 // ── GET /search (mobile API) ────────────────────────────────────────────────
 app.get("/search", async (req, res) => {
   try {
@@ -151,7 +140,6 @@ app.get("/search", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-
 // Shared bot-info fetch, used by both the /botinfo route and the
 // conversation-init logic below (which needs bot_name/bot_uid to satisfy
 // the website API's create-conversation validation).
@@ -167,7 +155,6 @@ async function fetchBotInfo(botId) {
   }
   return JSON.parse(text);
 }
-
 // ── GET /botinfo/:botId (mobile API) ──────────────────────────────────────────
 app.get("/botinfo/:botId", async (req, res) => {
   try {
@@ -179,7 +166,6 @@ app.get("/botinfo/:botId", async (req, res) => {
     res.status(502).json({ error: err.message });
   }
 });
-
 // ── GET /image (proxy bot images — no auth needed) ────────────────────────────
 app.get("/image", async (req, res) => {
   try {
@@ -204,14 +190,12 @@ app.get("/image", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-
 // Remembers which conversationId each (account, bot) pair is actually using,
 // since each account gets its own timestamp when a conversation is created —
 // reusing one account's timestamp for another account 500s (conversation
 // doesn't exist for them). Best-effort, in-memory only (resets on cold start,
 // but that's fine — a fresh conversationId gets created again automatically).
 const accountBotConversations = new Map(); // key: "accountIndex:botId" -> conversationId
-
 // Hits the endpoint that "opens" a brand-new conversation on the website side
 // before the first /send — mirrors what a real browser does when a chat
 // window is first opened, so the conversation exists server-side before we
@@ -231,7 +215,6 @@ function initHeaders(token, convId) {
     "Sec-Fetch-Site": "same-origin",
   };
 }
-
 const GOT_OPTS = {
   responseType: "text",
   throwHttpErrors: false,
@@ -241,7 +224,6 @@ const GOT_OPTS = {
     operatingSystems: ["windows"],
   },
 };
-
 // Website-side persona lookup — mobile /botinfo 404'd for this bot id in
 // testing, so bot metadata (real name, greeting/first_message) likely needs
 // to come from the website's own API instead of the mobile bot-service.
@@ -265,7 +247,6 @@ async function fetchPersonaPrefill(token, botId, convId) {
   }
   return JSON.parse(resp.body);
 }
-
 // Best-effort "open"/create of a brand-new conversation before the first
 // /send. Confirmed so far via live 422 responses from Chai's own validator:
 // required fields are conversation_id, bot_id, bot_uid, bot_name, and
@@ -275,7 +256,6 @@ async function initializeConversation(accountIndex, botId, convId, userMessage) 
   const account = WEBSITE_ACCOUNTS[accountIndex];
   const token = await websiteTokenGetters[accountIndex]();
   const { gotScraping } = await import("got-scraping"); // ESM-only package
-
   // Look up bot metadata from both sources concurrently (not sequentially)
   // to cut added latency roughly in half — we still want both as fallbacks
   // since persona/prefill 422s and mobile botInfo 404s independently
@@ -284,19 +264,16 @@ async function initializeConversation(accountIndex, botId, convId, userMessage) 
     fetchPersonaPrefill(token, botId, convId),
     fetchBotInfo(botId),
   ]);
-
   const persona = personaResult.status === "fulfilled" ? personaResult.value : null;
   if (personaResult.status === "rejected") {
     console.error(`❌ fetchPersonaPrefill failed for ${botId}: ${personaResult.reason.message}`);
   }
-
   const botInfo = botInfoResult.status === "fulfilled" ? botInfoResult.value : null;
   if (botInfoResult.status === "rejected") {
     console.error(`❌ fetchBotInfo failed for ${botId}: ${botInfoResult.reason.message}`);
   } else {
     console.log(`🔎 botInfo for ${botId}:`, JSON.stringify(botInfo).substring(0, 800));
   }
-
   const botName = persona?.name || persona?.botName || botInfo?.name || botInfo?.botName || botInfo?.displayName || "Bot";
   const botUid = persona?.uid || persona?.creatorUid || botInfo?.uid || botInfo?.creatorUid || botInfo?.creator_uid || botId;
   // Prefer the bot's actual greeting/opening line if we found one; otherwise
@@ -304,7 +281,6 @@ async function initializeConversation(accountIndex, botId, convId, userMessage) 
   // string is the one thing we already know fails validation.
   const firstMessage =
     persona?.first_message || persona?.firstMessage || persona?.greeting || userMessage || "Hello!";
-
   try {
     const postResp = await gotScraping.post(`${WEBSITE_API_BASE}/conversations`, {
       headers: { ...initHeaders(token, convId), "Content-Type": "application/json" },
@@ -346,7 +322,6 @@ async function initializeConversation(accountIndex, botId, convId, userMessage) 
     return null;
   }
 }
-
 // ── POST /chat (WEBSITE API, rotates across multiple accounts on 429) ────────
 app.post("/chat", async (req, res) => {
   try {
@@ -357,35 +332,15 @@ app.post("/chat", async (req, res) => {
     if (WEBSITE_ACCOUNTS.length === 0) {
       return res.status(500).json({ error: "No website accounts configured (WEBSITE_ACCOUNTS is empty)." });
     }
-
     // Extracts just the botId out of "<uid>__bot_<botId>_<timestamp>"
-    // Parses BOTH id formats we now see in the wild:
-    //   client format: <uid>__bot_<botId>_<timestamp>   (what this proxy used to generate)
-    //   server format: <uid>_<botId>_<timestamp>        (what Chai's backend actually assigns
-    //                                                     and what the app now correctly echoes
-    //                                                     back on follow-up messages)
-    // botId is always a UUID, which is what makes the server format unambiguous to parse
-    // despite using single underscores throughout.
-    function parseConvId(convId) {
+    function getBotId(convId) {
       const idx = convId.indexOf("__bot_");
-      if (idx !== -1) {
-        const uid = convId.substring(0, idx);
-        const rest = convId.substring(idx + "__bot_".length); // "<botId>_<timestamp>"
-        const botId = rest.replace(/_\d+$/, "");
-        return { uid, botId };
-      }
-      const serverMatch = convId.match(
-        /^(.+?)_([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})_(\d+)$/
-      );
-      if (serverMatch) {
-        return { uid: serverMatch[1], botId: serverMatch[2] };
-      }
-      return null;
+      if (idx === -1) return null;
+      const rest = convId.substring(idx + "__bot_".length); // "<botId>_<timestamp>"
+      return rest.replace(/_\d+$/, "");
     }
-    const parsedConvId = parseConvId(conversationId);
-    const botId = parsedConvId?.botId || null;
-    const originalUid = parsedConvId?.uid || null;
-
+    const botId = getBotId(conversationId);
+    const originalUid = botId ? conversationId.substring(0, conversationId.indexOf("__bot_")) : null;
     async function sendAs(accountIndex, convId) {
       const account = WEBSITE_ACCOUNTS[accountIndex];
       const token = await websiteTokenGetters[accountIndex]();
@@ -434,7 +389,6 @@ app.post("/chat", async (req, res) => {
         return { resp: { status: 500, ok: false }, bodyText: `got-scraping error: ${gotErr.message}` };
       }
     }
-
     function isMessageLimitError(bodyText) {
       try {
         const errCode = JSON.parse(bodyText)?.detail?.error || "";
@@ -443,13 +397,10 @@ app.post("/chat", async (req, res) => {
         return false;
       }
     }
-
     let response, text, usedAccountIndex, finalConversationId;
-
     for (let i = 0; i < WEBSITE_ACCOUNTS.length; i++) {
       const account = WEBSITE_ACCOUNTS[i];
       let convId;
-
       if (!botId) {
         // Couldn't parse the format at all — just pass through as-is.
         convId = conversationId;
@@ -460,29 +411,24 @@ app.post("/chat", async (req, res) => {
       } else {
         const cacheKey = `${i}:${botId}`;
         const existingId = accountBotConversations.get(cacheKey);
-
         if (existingId) {
           convId = existingId;
         } else {
           const requestedId = `${account.uid}__bot_${botId}_${Date.now()}`;
-
           // New conversation for this (account, bot) pair — create it
           // server-side before we try to send into it. Chai's backend does
           // NOT honor the id we request; it returns its own real id, which
           // is what MUST be used for /send and cached for reuse.
           console.log(`🆕 New conversation detected. Initializing...`);
           const realId = await initializeConversation(i, botId, requestedId, message);
-
           convId = realId || requestedId; // fall back to requested id if creation failed — will surface as a real error via /send rather than silently
           accountBotConversations.set(cacheKey, convId);
         }
       }
-
       console.log(`→ Trying website account [${i}] (${account.uid}) for conversation:`, convId);
       const result = await sendAs(i, convId);
       response = result.resp;
       text = result.bodyText;
-
       if (response.status !== 429 && response.status !== 500) {
         usedAccountIndex = i;
         finalConversationId = convId;
@@ -495,17 +441,14 @@ app.post("/chat", async (req, res) => {
       }
       console.log(`↻ Account [${i}] (${account.uid}) failed (status ${response.status}), trying next account...`);
     }
-
     console.log("← Website API status:", response.status);
     console.log("← Website API body:", text.substring(0, 500));
-
     if (response.status === 429) {
       return res.status(429).json({
         error: "all_accounts_rate_limited",
         detail: `All ${WEBSITE_ACCOUNTS.length} configured account(s) have hit their daily message limit.`,
       });
     }
-
     try {
       const parsed = JSON.parse(text);
       if (finalConversationId !== conversationId) {
@@ -521,7 +464,6 @@ app.post("/chat", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-
 // ── GET /token/mobile and /token/website — debug helpers ─────────────────────
 app.get("/token/mobile", async (req, res) => {
   try {
@@ -531,7 +473,6 @@ app.get("/token/mobile", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-
 app.get("/token/website/:index", async (req, res) => {
   try {
     const i = parseInt(req.params.index, 10);
@@ -544,22 +485,21 @@ app.get("/token/website/:index", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-
 // ── Health check ────────────────────────────────────────────────────────────
 app.get("/", (req, res) => res.json({
   status: "Chai Proxy running (true hybrid, multi-account chat fallback)",
-  // Bump this string every time you push a meaningful fix — lets you confirm
-  // from curl that Vercel actually deployed the new code, without needing
-  // to check the dashboard or guess from behavior.
-  version: "2026-08-11-parseConvId-dual-format-fix",
   note: "Feed/search/botinfo use MOBILE credentials. Chat rotates across WEBSITE_ACCOUNTS on daily rate limit.",
   configured: {
     mobile: { api_key: !!MOBILE_API_KEY, uid: !!MOBILE_UID, refresh_token: !!MOBILE_REFRESH_TOKEN },
     website: { api_key: !!WEBSITE_API_KEY, accounts: WEBSITE_ACCOUNTS.length, uids: WEBSITE_ACCOUNTS.map(a => a.uid) },
   },
 }));
-
 if (require.main === module) {
   app.listen(3001, () => console.log("Chai Proxy running on http://localhost:3001"));
 }
 module.exports = app;
+
+
+
+
+
