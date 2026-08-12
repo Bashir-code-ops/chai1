@@ -245,16 +245,9 @@ const GOT_OPTS = {
 // Website-side persona lookup — mobile /botinfo 404'd for this bot id in
 // testing, so bot metadata (real name, greeting/first_message) likely needs
 // to come from the website's own API instead of the mobile bot-service.
-// Endpoint path is a guess based on prior reconnaissance of chai-ai.com's
-// API (persona/prefill was previously found to return structured per-bot
-// data); logged in full so the real shape/path can be corrected if wrong.
 async function fetchPersonaPrefill(token, botId, convId) {
   const { gotScraping } = await import("got-scraping");
   const resp = await gotScraping.get(`${WEBSITE_API_BASE}/persona/prefill`, {
-    // The endpoint's own 422 told us bot_uid is required alongside bot_id —
-    // we don't know the bot's real uid distinct from its id, so try botId
-    // itself first (same guess that worked for the /conversations create
-    // body's bot_uid field).
     searchParams: { bot_id: botId, bot_uid: botId },
     headers: initHeaders(token, convId),
     ...GOT_OPTS,
@@ -266,30 +259,27 @@ async function fetchPersonaPrefill(token, botId, convId) {
   return JSON.parse(resp.body);
 }
 
-// Best-effort "open"/create of a brand-new conversation before the first
-// /send. Confirmed so far via live 422 responses from Chai's own validator:
-// required fields are conversation_id, bot_id, bot_uid, bot_name, and
-// first_message. bot_uid/bot_name are now accepted; first_message is the
-// remaining gap this version fills in.
+// Creates a brand-new conversation before the first /send. Chai's backend
+// requires conversation_id, bot_id, bot_uid, bot_name, and first_message,
+// and — critically — does NOT honor the conversation_id we send; it mints
+// its own (different format) and returns it. Every /send afterward MUST use
+// that real id, not the one we constructed, or it 500s.
 async function initializeConversation(accountIndex, botId, convId, userMessage) {
   const account = WEBSITE_ACCOUNTS[accountIndex];
   const token = await websiteTokenGetters[accountIndex]();
   const { gotScraping } = await import("got-scraping"); // ESM-only package
 
-  // Look up bot metadata from both sources concurrently (not sequentially)
-  // to cut added latency roughly in half — we still want both as fallbacks
-  // since persona/prefill 422s and mobile botInfo 404s independently
-  // depending on the bot, and we don't know in advance which will work.
+  // Look up bot metadata from both sources concurrently — persona/prefill
+  // and mobile botInfo each 4xx/5xx independently depending on the bot, so
+  // we try both and use whichever succeeds.
   const [personaResult, botInfoResult] = await Promise.allSettled([
     fetchPersonaPrefill(token, botId, convId),
     fetchBotInfo(botId),
   ]);
-
   const persona = personaResult.status === "fulfilled" ? personaResult.value : null;
   if (personaResult.status === "rejected") {
     console.error(`❌ fetchPersonaPrefill failed for ${botId}: ${personaResult.reason.message}`);
   }
-
   const botInfo = botInfoResult.status === "fulfilled" ? botInfoResult.value : null;
   if (botInfoResult.status === "rejected") {
     console.error(`❌ fetchBotInfo failed for ${botId}: ${botInfoResult.reason.message}`);
@@ -299,9 +289,6 @@ async function initializeConversation(accountIndex, botId, convId, userMessage) 
 
   const botName = persona?.name || persona?.botName || botInfo?.name || botInfo?.botName || botInfo?.displayName || "Bot";
   const botUid = persona?.uid || persona?.creatorUid || botInfo?.uid || botInfo?.creatorUid || botInfo?.creator_uid || botId;
-  // Prefer the bot's actual greeting/opening line if we found one; otherwise
-  // fall back to the real message the user is about to send, since an empty
-  // string is the one thing we already know fails validation.
   const firstMessage =
     persona?.first_message || persona?.firstMessage || persona?.greeting || userMessage || "Hello!";
 
@@ -319,11 +306,6 @@ async function initializeConversation(accountIndex, botId, convId, userMessage) 
     });
     console.log(`🔎 init POST /conversations -> ${postResp.statusCode} | body: ${postResp.body}`);
     if (postResp.statusCode >= 200 && postResp.statusCode < 300) {
-      // IMPORTANT: Chai's backend does NOT honor the conversation_id we send
-      // — it mints its own (different format: single underscore, no "bot_"
-      // segment, server-side timestamp) and returns it here. Every /send
-      // afterward MUST use this real id, not the one we constructed, or it
-      // 500s against a conversation that doesn't actually exist server-side.
       let realId = null;
       try {
         realId = JSON.parse(postResp.body)?.conversation_id || null;
@@ -333,12 +315,12 @@ async function initializeConversation(accountIndex, botId, convId, userMessage) 
       if (realId && realId !== convId) {
         console.log(`↪️  Server assigned a different conversation_id: ${realId} (requested: ${convId})`);
       } else if (!realId) {
-        console.error(`⚠️  201 response had no parseable conversation_id — /send will likely still fail.`);
+        console.error(`⚠️  2xx response had no parseable conversation_id — /send will likely still fail.`);
       }
       console.log(`✨ Conversation created via POST for account ${account.uid}`);
       return realId;
     } else {
-      console.error(`❌ POST /conversations still not 2xx for ${convId} (status ${postResp.statusCode}). See body above for remaining missing/invalid fields.`);
+      console.error(`❌ POST /conversations still not 2xx for ${convId} (status ${postResp.statusCode}).`);
       return null;
     }
   } catch (e) {
@@ -359,32 +341,14 @@ app.post("/chat", async (req, res) => {
     }
 
     // Extracts just the botId out of "<uid>__bot_<botId>_<timestamp>"
-    // Parses BOTH id formats we now see in the wild:
-    //   client format: <uid>__bot_<botId>_<timestamp>   (what this proxy used to generate)
-    //   server format: <uid>_<botId>_<timestamp>        (what Chai's backend actually assigns
-    //                                                     and what the app now correctly echoes
-    //                                                     back on follow-up messages)
-    // botId is always a UUID, which is what makes the server format unambiguous to parse
-    // despite using single underscores throughout.
-    function parseConvId(convId) {
+    function getBotId(convId) {
       const idx = convId.indexOf("__bot_");
-      if (idx !== -1) {
-        const uid = convId.substring(0, idx);
-        const rest = convId.substring(idx + "__bot_".length); // "<botId>_<timestamp>"
-        const botId = rest.replace(/_\d+$/, "");
-        return { uid, botId };
-      }
-      const serverMatch = convId.match(
-        /^(.+?)_([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})_(\d+)$/
-      );
-      if (serverMatch) {
-        return { uid: serverMatch[1], botId: serverMatch[2] };
-      }
-      return null;
+      if (idx === -1) return null;
+      const rest = convId.substring(idx + "__bot_".length); // "<botId>_<timestamp>"
+      return rest.replace(/_\d+$/, "");
     }
-    const parsedConvId = parseConvId(conversationId);
-    const botId = parsedConvId?.botId || null;
-    const originalUid = parsedConvId?.uid || null;
+    const botId = getBotId(conversationId);
+    const originalUid = botId ? conversationId.substring(0, conversationId.indexOf("__bot_")) : null;
 
     async function sendAs(accountIndex, convId) {
       const account = WEBSITE_ACCOUNTS[accountIndex];
@@ -392,34 +356,11 @@ app.post("/chat", async (req, res) => {
       try {
         const { gotScraping } = await import("got-scraping"); // ESM-only package
         const gotResp = await gotScraping.post(`${WEBSITE_API_BASE}/conversations/${convId}/send`, {
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-            Origin: "https://www.chai-ai.com",
-            Referer: `https://www.chai-ai.com/chat/${convId}`,
-            Accept: "application/json, text/plain, */*",
-            "Accept-Language": "en-US,en;q=0.9",
-            "sec-ch-ua": '"Not=A?Brand";v="99", "Microsoft Edge";v="151", "Chromium";v="151"',
-            "sec-ch-ua-mobile": "?0",
-            "sec-ch-ua-platform": '"Windows"',
-            "Sec-Fetch-Dest": "empty",
-            "Sec-Fetch-Mode": "cors",
-            "Sec-Fetch-Site": "same-origin",
-          },
+          headers: { ...initHeaders(token, convId), "Content-Type": "application/json" },
           json: { content: message || "" },
-          responseType: "text",
-          throwHttpErrors: false, // we handle non-2xx ourselves below
-          headerGeneratorOptions: {
-            browsers: [{ name: "chrome", minVersion: 120 }],
-            devices: ["desktop"],
-            operatingSystems: ["windows"],
-          },
+          ...GOT_OPTS,
         });
         if (gotResp.statusCode >= 500) {
-          // Server/gateway header + content-type tell us whether this 500 is
-          // coming from Chai's app (usually has their own server header /
-          // JSON body) or from a fronting proxy/WAF (often generic server
-          // headers + plain-text body like "Internal Server Error").
           const h = gotResp.headers || {};
           console.error(
             `🩺 /send 500 diag [acct ${accountIndex}] server=${h.server || "?"} content-type=${h["content-type"] || "?"} cf-ray=${h["cf-ray"] || "none"} x-vercel-id=${h["x-vercel-id"] || "none"}`
@@ -451,47 +392,56 @@ app.post("/chat", async (req, res) => {
       let convId;
 
       if (!botId) {
-        // Couldn't parse the format at all — just pass through as-is.
         convId = conversationId;
       } else if (account.uid === originalUid) {
-        // This IS the account the conversationId was originally built for —
-        // use it exactly as given.
         convId = conversationId;
       } else {
         const cacheKey = `${i}:${botId}`;
         const existingId = accountBotConversations.get(cacheKey);
-
         if (existingId) {
           convId = existingId;
         } else {
           const requestedId = `${account.uid}__bot_${botId}_${Date.now()}`;
-
-          // New conversation for this (account, bot) pair — create it
-          // server-side before we try to send into it. Chai's backend does
-          // NOT honor the id we request; it returns its own real id, which
-          // is what MUST be used for /send and cached for reuse.
           console.log(`🆕 New conversation detected. Initializing...`);
           const realId = await initializeConversation(i, botId, requestedId, message);
-
-          convId = realId || requestedId; // fall back to requested id if creation failed — will surface as a real error via /send rather than silently
+          convId = realId || requestedId;
           accountBotConversations.set(cacheKey, convId);
         }
       }
 
       console.log(`→ Trying website account [${i}] (${account.uid}) for conversation:`, convId);
-      const result = await sendAs(i, convId);
+      let result = await sendAs(i, convId);
       response = result.resp;
       text = result.bodyText;
+
+      // If this was the original account's own conversationId and it 500'd,
+      // it's likely a genuinely new conversation that was never initialized.
+      // Try to init it now and retry once. Only fires on a real 500 from a
+      // real send attempt, so pre-existing conversations are never touched
+      // by an unnecessary re-init (unlike a pre-emptive cache-check, which
+      // could re-trigger init after every cold start for conversations that
+      // already exist on Chai's servers).
+      if (response.status === 500 && account.uid === originalUid && botId) {
+        console.log(`↻ Original account got 500 on ${convId} — attempting init + retry...`);
+        const realId = await initializeConversation(i, botId, convId, message);
+        if (realId) {
+          convId = realId;
+          accountBotConversations.set(`${i}:${botId}`, realId);
+          result = await sendAs(i, convId);
+          response = result.resp;
+          text = result.bodyText;
+        }
+      }
 
       if (response.status !== 429 && response.status !== 500) {
         usedAccountIndex = i;
         finalConversationId = convId;
-        break; // success, or a real (non-retryable) failure — stop trying more accounts
+        break;
       }
       if (response.status === 429 && !isMessageLimitError(text)) {
         usedAccountIndex = i;
         finalConversationId = convId;
-        break; // a 429 that ISN'T our rate-limit signature — treat as final
+        break;
       }
       console.log(`↻ Account [${i}] (${account.uid}) failed (status ${response.status}), trying next account...`);
     }
@@ -511,7 +461,7 @@ app.post("/chat", async (req, res) => {
       if (finalConversationId !== conversationId) {
         parsed._newConversationId = finalConversationId;
       }
-      parsed._accountIndex = usedAccountIndex; // useful for debugging/logging
+      parsed._accountIndex = usedAccountIndex;
       res.status(response.status).json(parsed);
     } catch {
       res.status(response.status).send(text);
@@ -547,12 +497,8 @@ app.get("/token/website/:index", async (req, res) => {
 
 // ── Health check ────────────────────────────────────────────────────────────
 app.get("/", (req, res) => res.json({
-  status: "Chai Proxy running (true hybrid, multi-account chat fallback)",
-  // Bump this string every time you push a meaningful fix — lets you confirm
-  // from curl that Vercel actually deployed the new code, without needing
-  // to check the dashboard or guess from behavior.
-  version: "2026-08-11-parseConvId-dual-format-fix",
-  note: "Feed/search/botinfo use MOBILE credentials. Chat rotates across WEBSITE_ACCOUNTS on daily rate limit.",
+  status: "Chai Proxy running (true hybrid, multi-account chat fallback, auto-init new conversations)",
+  note: "Feed/search/botinfo use MOBILE credentials. Chat rotates across WEBSITE_ACCOUNTS on daily rate limit, and auto-creates conversations that don't exist yet.",
   configured: {
     mobile: { api_key: !!MOBILE_API_KEY, uid: !!MOBILE_UID, refresh_token: !!MOBILE_REFRESH_TOKEN },
     website: { api_key: !!WEBSITE_API_KEY, accounts: WEBSITE_ACCOUNTS.length, uids: WEBSITE_ACCOUNTS.map(a => a.uid) },
