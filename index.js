@@ -3,6 +3,7 @@ const cors = require("cors");
 const app = express();
 app.use(cors());
 app.use(express.json());
+app.get("/ping", (req, res) => res.json({ alive: true, ts: Date.now() }));
 
 // ── TRUE Hybrid: two SEPARATE Firebase projects/accounts ─────────────────────
 // The mobile app and the website are different Firebase projects, even for the
