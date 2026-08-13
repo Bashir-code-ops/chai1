@@ -3,6 +3,11 @@ const cors = require("cors");
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+// Temporary diagnostic route — does nothing but respond immediately.
+// If THIS also 429s under the same traffic pattern, it confirms the 429 is
+// happening at Vercel's edge/infra level, before our code even runs.
+// Safe to delete once the theory is confirmed either way.
 app.get("/ping", (req, res) => res.json({ alive: true, ts: Date.now() }));
 
 // ── TRUE Hybrid: two SEPARATE Firebase projects/accounts ─────────────────────
@@ -291,7 +296,13 @@ async function initializeConversation(accountIndex, botId, convId, userMessage) 
   const botName = persona?.name || persona?.botName || botInfo?.name || botInfo?.botName || botInfo?.displayName || "Bot";
   const botUid = persona?.uid || persona?.creatorUid || botInfo?.uid || botInfo?.creatorUid || botInfo?.creator_uid || botId;
   const firstMessage =
-    persona?.first_message || persona?.firstMessage || persona?.greeting || userMessage || "Hello!";
+    // Never let the user's own message become the bot's "greeting" — if we
+    // couldn't find a real greeting from persona/botInfo, "Hello!" is a far
+    // safer fallback than the user's text, since that text can be a huge
+    // character-card prompt (as it often is here), which would poison the
+    // conversation by making the bot's very first "act" be reciting its own
+    // description back instead of actually responding to the user.
+    persona?.first_message || persona?.firstMessage || persona?.greeting || "Hello!";
 
   try {
     const postResp = await gotScraping.post(`${WEBSITE_API_BASE}/conversations`, {
