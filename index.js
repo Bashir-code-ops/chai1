@@ -174,6 +174,31 @@ async function fetchBotInfo(botId) {
   return JSON.parse(text);
 }
 
+// Fallback bot metadata source — persona/prefill and fetchBotInfo both fail
+// for some bots (500/404 respectively), so as a third source, search for the
+// bot by its own ID via the mobile search endpoint, which returns basic
+// listing info (name, tagline/greeting) for bots that show up in search
+// results. Not guaranteed to find every bot, but a real name/greeting is
+// far better than the generic "Bot"/"Hello!" fallback when available.
+async function fetchBotViaSearch(botId) {
+  const token = await getMobileToken();
+  const response = await fetch(
+    `https://bot-service-us1-65663778556.us-central1.run.app/v2/search?text=${encodeURIComponent(botId)}&limit=5&offset=0`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(`search returned ${response.status}: ${text.substring(0, 300)}`);
+  }
+  const data = JSON.parse(text);
+  const results = data?.bots || data?.results || data?.chatbots || (Array.isArray(data) ? data : []);
+  const match = results.find(b => (b.bot_id || b.botId || b.uid || b.id) === botId);
+  if (!match) {
+    throw new Error(`search did not return a matching bot for ${botId}`);
+  }
+  return match;
+}
+
 // ── GET /botinfo/:botId (mobile API) ──────────────────────────────────────────
 app.get("/botinfo/:botId", async (req, res) => {
   try {
@@ -275,12 +300,13 @@ async function initializeConversation(accountIndex, botId, convId, userMessage) 
   const token = await websiteTokenGetters[accountIndex]();
   const { gotScraping } = await import("got-scraping"); // ESM-only package
 
-  // Look up bot metadata from both sources concurrently — persona/prefill
-  // and mobile botInfo each 4xx/5xx independently depending on the bot, so
-  // we try both and use whichever succeeds.
-  const [personaResult, botInfoResult] = await Promise.allSettled([
+  // Look up bot metadata from three sources concurrently — persona/prefill,
+  // mobile botInfo, and search each fail independently depending on the bot,
+  // so we try all three and merge whichever succeed.
+  const [personaResult, botInfoResult, searchResult] = await Promise.allSettled([
     fetchPersonaPrefill(token, botId, convId),
     fetchBotInfo(botId),
+    fetchBotViaSearch(botId),
   ]);
   const persona = personaResult.status === "fulfilled" ? personaResult.value : null;
   if (personaResult.status === "rejected") {
@@ -292,9 +318,15 @@ async function initializeConversation(accountIndex, botId, convId, userMessage) 
   } else {
     console.log(`🔎 botInfo for ${botId}:`, JSON.stringify(botInfo).substring(0, 800));
   }
+  const searchInfo = searchResult.status === "fulfilled" ? searchResult.value : null;
+  if (searchResult.status === "rejected") {
+    console.error(`❌ fetchBotViaSearch failed for ${botId}: ${searchResult.reason.message}`);
+  } else {
+    console.log(`🔎 searchInfo for ${botId}:`, JSON.stringify(searchInfo).substring(0, 800));
+  }
 
-  const botName = persona?.name || persona?.botName || botInfo?.name || botInfo?.botName || botInfo?.displayName || "Bot";
-  const botUid = persona?.uid || persona?.creatorUid || botInfo?.uid || botInfo?.creatorUid || botInfo?.creator_uid || botId;
+  const botName = persona?.name || persona?.botName || botInfo?.name || botInfo?.botName || botInfo?.displayName || searchInfo?.name || searchInfo?.botName || "Bot";
+  const botUid = persona?.uid || persona?.creatorUid || botInfo?.uid || botInfo?.creatorUid || botInfo?.creator_uid || searchInfo?.uid || searchInfo?.creatorUid || botId;
   const firstMessage =
     // Never let the user's own message become the bot's "greeting" — if we
     // couldn't find a real greeting from persona/botInfo, "Hello!" is a far
@@ -302,7 +334,8 @@ async function initializeConversation(accountIndex, botId, convId, userMessage) 
     // character-card prompt (as it often is here), which would poison the
     // conversation by making the bot's very first "act" be reciting its own
     // description back instead of actually responding to the user.
-    persona?.first_message || persona?.firstMessage || persona?.greeting || "Hello!";
+    persona?.first_message || persona?.firstMessage || persona?.greeting ||
+    searchInfo?.first_message || searchInfo?.greeting || searchInfo?.tagline || "Hello!";
 
   try {
     const postResp = await gotScraping.post(`${WEBSITE_API_BASE}/conversations`, {
