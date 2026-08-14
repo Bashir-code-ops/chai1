@@ -216,7 +216,7 @@ app.get("/image", async (req, res) => {
 // reusing one account's timestamp for another account 500s (conversation
 // doesn't exist for them). Best-effort, in-memory only (resets on cold start,
 // but that's fine — a fresh conversationId gets created again automatically).
-const accountBotConversations = new Map(); // key: "accountIndex:botId" -> conversationId
+const accountBotConversations = new Map(); // key: "accountIndex:originalConversationId" -> realConversationId
 
 // Hits the endpoint that "opens" a brand-new conversation on the website side
 // before the first /send — mirrors what a real browser does when a chat
@@ -408,7 +408,12 @@ app.post("/chat", async (req, res) => {
       } else if (account.uid === originalUid) {
         convId = conversationId;
       } else {
-        const cacheKey = `${i}:${botId}`;
+        // Cache key includes the ORIGINAL conversationId (not just bot+account)
+        // so that starting a genuinely new chat with this bot (a different
+        // original conversationId, e.g. a fresh "New Chat" from the frontend)
+        // never reuses a stale/previous conversation cached for this account
+        // from an earlier, unrelated chat session with the same bot.
+        const cacheKey = `${i}:${conversationId}`;
         const existingId = accountBotConversations.get(cacheKey);
         if (existingId) {
           convId = existingId;
@@ -438,7 +443,7 @@ app.post("/chat", async (req, res) => {
         const realId = await initializeConversation(i, botId, convId, message);
         if (realId) {
           convId = realId;
-          accountBotConversations.set(`${i}:${botId}`, realId);
+          accountBotConversations.set(`${i}:${conversationId}`, realId);
           result = await sendAs(i, convId);
           response = result.resp;
           text = result.bodyText;
