@@ -295,37 +295,50 @@ async function fetchPersonaPrefill(token, botId, convId) {
 // and — critically — does NOT honor the conversation_id we send; it mints
 // its own (different format) and returns it. Every /send afterward MUST use
 // that real id, not the one we constructed, or it 500s.
-async function initializeConversation(accountIndex, botId, convId, userMessage) {
+async function initializeConversation(accountIndex, botId, convId, userMessage, clientBotName, clientBotGreeting) {
   const account = WEBSITE_ACCOUNTS[accountIndex];
   const token = await websiteTokenGetters[accountIndex]();
   const { gotScraping } = await import("got-scraping"); // ESM-only package
 
-  // Look up bot metadata from three sources concurrently — persona/prefill,
-  // mobile botInfo, and search each fail independently depending on the bot,
-  // so we try all three and merge whichever succeed.
-  const [personaResult, botInfoResult, searchResult] = await Promise.allSettled([
-    fetchPersonaPrefill(token, botId, convId),
-    fetchBotInfo(botId),
-    fetchBotViaSearch(botId),
-  ]);
-  const persona = personaResult.status === "fulfilled" ? personaResult.value : null;
-  if (personaResult.status === "rejected") {
-    console.error(`❌ fetchPersonaPrefill failed for ${botId}: ${personaResult.reason.message}`);
-  }
-  const botInfo = botInfoResult.status === "fulfilled" ? botInfoResult.value : null;
-  if (botInfoResult.status === "rejected") {
-    console.error(`❌ fetchBotInfo failed for ${botId}: ${botInfoResult.reason.message}`);
+  // If the frontend already knows the bot's name/greeting (from browsing the
+  // feed/search results), skip the flaky metadata lookups entirely — we only
+  // still need botUid, and botId itself is an acceptable fallback for that.
+  let persona = null, botInfo = null, searchInfo = null;
+
+  if (!clientBotName || !clientBotGreeting) {
+    // Look up bot metadata from three sources concurrently — persona/prefill,
+    // mobile botInfo, and search each fail independently depending on the
+    // bot, so we try all three and merge whichever succeed. Only needed as a
+    // fallback when the client didn't already supply what we need.
+    const [personaResult, botInfoResult, searchResult] = await Promise.allSettled([
+      fetchPersonaPrefill(token, botId, convId),
+      fetchBotInfo(botId),
+      fetchBotViaSearch(botId),
+    ]);
+    persona = personaResult.status === "fulfilled" ? personaResult.value : null;
+    if (personaResult.status === "rejected") {
+      console.error(`❌ fetchPersonaPrefill failed for ${botId}: ${personaResult.reason.message}`);
+    }
+    botInfo = botInfoResult.status === "fulfilled" ? botInfoResult.value : null;
+    if (botInfoResult.status === "rejected") {
+      console.error(`❌ fetchBotInfo failed for ${botId}: ${botInfoResult.reason.message}`);
+    } else {
+      console.log(`🔎 botInfo for ${botId}:`, JSON.stringify(botInfo).substring(0, 800));
+    }
+    searchInfo = searchResult.status === "fulfilled" ? searchResult.value : null;
+    if (searchResult.status === "rejected") {
+      console.error(`❌ fetchBotViaSearch failed for ${botId}: ${searchResult.reason.message}`);
+    } else {
+      console.log(`🔎 searchInfo for ${botId}:`, JSON.stringify(searchInfo).substring(0, 800));
+    }
   } else {
-    console.log(`🔎 botInfo for ${botId}:`, JSON.stringify(botInfo).substring(0, 800));
-  }
-  const searchInfo = searchResult.status === "fulfilled" ? searchResult.value : null;
-  if (searchResult.status === "rejected") {
-    console.error(`❌ fetchBotViaSearch failed for ${botId}: ${searchResult.reason.message}`);
-  } else {
-    console.log(`🔎 searchInfo for ${botId}:`, JSON.stringify(searchInfo).substring(0, 800));
+    console.log(`✅ Using client-supplied bot metadata for ${botId}, skipping server-side lookups`);
   }
 
-  const botName = persona?.name || persona?.botName || botInfo?.name || botInfo?.botName || botInfo?.displayName || searchInfo?.name || searchInfo?.botName || "Bot";
+  // Client-supplied values take priority — the frontend already has this
+  // from the feed/search UI, which is far more reliable than Chai's
+  // persona/prefill and bot-service endpoints (which fail for many bots).
+  const botName = clientBotName || persona?.name || persona?.botName || botInfo?.name || botInfo?.botName || botInfo?.displayName || searchInfo?.name || searchInfo?.botName || "Bot";
   const botUid = persona?.uid || persona?.creatorUid || botInfo?.uid || botInfo?.creatorUid || botInfo?.creator_uid || searchInfo?.uid || searchInfo?.creatorUid || botId;
   const firstMessage =
     // Never let the user's own message become the bot's "greeting" — if we
@@ -334,7 +347,7 @@ async function initializeConversation(accountIndex, botId, convId, userMessage) 
     // character-card prompt (as it often is here), which would poison the
     // conversation by making the bot's very first "act" be reciting its own
     // description back instead of actually responding to the user.
-    persona?.first_message || persona?.firstMessage || persona?.greeting ||
+    clientBotGreeting || persona?.first_message || persona?.firstMessage || persona?.greeting ||
     searchInfo?.first_message || searchInfo?.greeting || searchInfo?.tagline || "Hello!";
 
   try {
@@ -377,7 +390,7 @@ async function initializeConversation(accountIndex, botId, convId, userMessage) 
 // ── POST /chat (WEBSITE API, rotates across multiple accounts on 429) ────────
 app.post("/chat", async (req, res) => {
   try {
-    const { conversationId, message } = req.body;
+    const { conversationId, message, botName: clientBotName, botGreeting: clientBotGreeting } = req.body;
     if (!conversationId) {
       return res.status(400).json({ error: "conversationId is required" });
     }
@@ -453,7 +466,7 @@ app.post("/chat", async (req, res) => {
         } else {
           const requestedId = `${account.uid}__bot_${botId}_${Date.now()}`;
           console.log(`🆕 New conversation detected. Initializing...`);
-          const realId = await initializeConversation(i, botId, requestedId, message);
+          const realId = await initializeConversation(i, botId, requestedId, message, clientBotName, clientBotGreeting);
           convId = realId || requestedId;
           accountBotConversations.set(cacheKey, convId);
         }
@@ -473,7 +486,7 @@ app.post("/chat", async (req, res) => {
       // already exist on Chai's servers).
       if (response.status === 500 && account.uid === originalUid && botId) {
         console.log(`↻ Original account got 500 on ${convId} — attempting init + retry...`);
-        const realId = await initializeConversation(i, botId, convId, message);
+        const realId = await initializeConversation(i, botId, convId, message, clientBotName, clientBotGreeting);
         if (realId) {
           convId = realId;
           accountBotConversations.set(`${i}:${conversationId}`, realId);
